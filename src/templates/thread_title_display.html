@@ -1,0 +1,55 @@
+<section id="thread-title" class="threadHeader">
+  <div class="threadTitleCenter">
+    <h1 class="threadTitle">{{ thread.title }}</h1>
+    <button
+      class="threadTitleIconButton iconButton"
+      type="button"
+      hx-get="/chat/{{ thread.id }}/title/edit"
+      hx-target="#thread-title"
+      hx-swap="outerHTML"
+      aria-label="Edit title"
+      title="Edit title"
+    >
+      <i class="fas fa-pen" aria-hidden="true"></i>
+    </button>
+  </div>
+  <style>
+    @scope {
+      :scope {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 1rem;
+      }
+
+      .threadTitleCenter {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: .45rem;
+        max-width: 100%;
+      }
+
+      .threadTitle {
+        margin: 0;
+        font-size: clamp(1.1rem, 1rem + .5vw, 1.45rem);
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+        text-align: center;
+      }
+
+      .threadTitleIconButton {
+        flex: 0 0 auto;
+        border: 0;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+      }
+
+      .threadTitleIconButton:hover,
+      .threadTitleIconButton:focus-visible {
+        background: var(--bg-sidebar-hover);
+        color: var(--text-main);
+      }
+    }
+  </style>
+</section>

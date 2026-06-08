@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit Base Assistant" if assistant else "Create Base Assistant" }}{% endblock %}
+{% block body %}
+<div class="appShell">
+  {% include "sidebar.html" %}
+  <main class="mainArea">
+    <div class="scrollRegion">
+      <div class="pageContainer">
+        <header class="pageHeader">
+          <div>
+            <h1 class="pageHeading">{{ "Edit Base Assistant" if assistant else "Create Base Assistant" }}</h1>
+          </div>
+          <div class="actionRow">
+            <a class="button buttonGhost" href="/admin/base-assistants">Back</a>
+          </div>
+        </header>
+        <section class="formPanel panelBody">
+          <form class="assistantFormStack" method="post" action="{% if assistant %}/admin/base-assistants/{{ assistant.id }}/edit{% else %}/admin/base-assistants/new{% endif %}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <section class="assistantFormSection assistantPrimarySection">
+              <h2 class="sectionHeading">Basic settings</h2>
+              <div class="assistantFormColumns">
+                <div class="formField">
+                  <label class="labelText" for="name">Name</label>
+                  <input class="inputField" id="name" name="name" value="{{ assistant.name if assistant else '' }}" placeholder="Name" required>
+                </div>
+                <div class="formField">
+                  <label class="labelText" for="description">Description</label>
+                  <input class="inputField" id="description" name="description" value="{{ assistant.description if assistant else '' }}" placeholder="Description">
+                </div>
+                <div class="assistantProviderModelGroup">
+                  <div class="formField">
+                    <label class="labelText" for="connection_provider_id">Provider</label>
+                    <select class="selectField" id="connection_provider_id" name="connection_provider_id" required>
+                      <option value="" {% if not assistant or not assistant.connection_provider_id %}selected{% endif %}>&lt;select&gt;</option>
+                      {% for provider in providers %}
+                      <option value="{{ provider.id }}" {% if assistant and assistant.connection_provider_id == provider.id %}selected{% endif %}>{{ provider.name }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="formField">
+                    <label class="labelText" for="model">Model</label>
+                    <select class="selectField" id="model" name="model" data-provider-model-select data-current-model="{{ assistant.model if assistant else '' }}" required>
+                      <option value="">&lt;select&gt;</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="formField">
+                  <label class="labelText" for="max_history_messages">History limit</label>
+                  <input class="inputField" id="max_history_messages" name="max_history_messages" type="number" min="1" value="{{ assistant.max_history_messages if assistant else 40 }}" placeholder="40" required>
+                </div>
+                <div class="formField">
+                  <label class="labelText" for="allow_file_upload">File upload</label>
+                  <label class="checkboxRow">
+                    <input id="allow_file_upload" name="allow_file_upload" type="checkbox" {% if assistant and assistant.allow_file_upload %}checked{% endif %}>
+                    <span>Allowed</span>
+                  </label>
+                </div>
+                <div class="formField assistantFormWide">
+                  <label class="labelText" for="allowed_file_extensions">Allowed extensions</label>
+                  <input class="inputField" id="allowed_file_extensions" name="allowed_file_extensions" value="{{ allowed_file_extensions_text }}" placeholder="jpg, jpeg, png">
+                </div>
+              </div>
+            </section>
+            <section class="assistantFormSection">
+              <h2 class="sectionHeading">Prompts</h2>
+              <div class="assistantPromptGrid">
+                <div class="formField">
+                  <label class="labelText" for="system_prompt">System Prompt</label>
+                  <textarea class="inputField assistantTextarea" id="system_prompt" name="system_prompt" rows="8" placeholder="例：機密情報は扱わない">{{ assistant.system_prompt if assistant else '' }}</textarea>
+                </div>
+                <div class="formField">
+                  <div class="assistantPromptHeader">
+                    <label class="labelText">User Prompts</label>
+                    <button class="button buttonGhost" type="button" data-add-user-prompt>+ Prompt</button>
+                  </div>
+                  <div class="assistantPromptList" data-user-prompts>
+                    {% for prompt in user_prompts %}
+                    <textarea class="inputField assistantTextarea" name="user_prompts" rows="5" placeholder="例：短く返答します">{{ prompt }}</textarea>
+                    {% endfor %}
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="assistantFormSection assistantJsonSection">
+              <h2 class="sectionHeading">Config JSON</h2>
+              <div class="formField">
+                <label class="labelText" for="generation_config_json">Generation config</label>
+                <textarea class="inputField assistantTextarea assistantCodeArea" id="generation_config_json" name="generation_config_json" rows="10" placeholder='例：{"temperature": 0.2}'>{{ generation_config_json }}</textarea>
+              </div>
+            </section>
+            <div class="formActions">
+              <button class="button buttonPrimary" type="submit">{{ "Save" if assistant else "Create" }}</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+    <style>
+    @scope {
+      .assistantFormStack {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+      }
+
+      .assistantFormSection {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-base);
+      }
+
+      .assistantFormSection + .assistantFormSection {
+        border-top: 1px solid var(--border-subtle);
+        padding-top: 1.5rem;
+      }
+
+      .assistantPrimarySection {
+        padding-bottom: 0.25rem;
+      }
+
+      .assistantFormColumns {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--space-base);
+      }
+
+      .assistantProviderModelGroup {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--space-compact);
+        padding: var(--space-compact);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        background: var(--bg-main);
+      }
+
+      .assistantFormWide {
+        grid-column: 1 / -1;
+      }
+
+      .assistantPromptGrid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: var(--space-base);
+        align-items: start;
+      }
+
+      .assistantTextarea {
+        min-height: 9rem;
+        resize: vertical;
+      }
+
+      .assistantPromptHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-compact);
+        margin-bottom: var(--space-compact);
+      }
+
+      .assistantPromptList {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-compact);
+      }
+
+      .assistantCodeArea {
+        font-family: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", monospace;
+        font-size: 0.88rem;
+      }
+
+      @media (max-width: 900px) {
+        .assistantFormColumns,
+        .assistantProviderModelGroup,
+        .assistantPromptGrid {
+          grid-template-columns: 1fr;
+        }
+      }
+    }
+    </style>
+  </main>
+</div>
+<script>
+  (() => {
+    const promptList = document.querySelector("[data-user-prompts]");
+    const addPrompt = document.querySelector("[data-add-user-prompt]");
+    addPrompt?.addEventListener("click", () => {
+      const textarea = document.createElement("textarea");
+      textarea.className = "inputField assistantTextarea";
+      textarea.name = "user_prompts";
+      textarea.rows = 5;
+      textarea.placeholder = "例：短く返答します";
+      promptList?.append(textarea);
+      textarea.focus();
+    });
+    const providerModels = {{ provider_models_json | safe }};
+    const providerSelect = document.getElementById("connection_provider_id");
+    const modelSelect = document.querySelector("[data-provider-model-select]");
+    if (!providerSelect || !modelSelect) return;
+    const currentModel = modelSelect.dataset.currentModel || "";
+    const renderModels = () => {
+      const models = providerModels[providerSelect.value] || [];
+      modelSelect.replaceChildren();
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "<select>";
+      modelSelect.append(placeholder);
+      for (const model of models) {
+        const option = document.createElement("option");
+        option.value = model;
+        option.textContent = model;
+        option.selected = model === currentModel;
+        modelSelect.append(option);
+      }
+      if (models.length === 0 && currentModel) {
+        const option = document.createElement("option");
+        option.value = currentModel;
+        option.textContent = currentModel;
+        option.selected = true;
+        modelSelect.append(option);
+      }
+    };
+    providerSelect.addEventListener("change", renderModels);
+    renderModels();
+  })();
+</script>
+{% endblock %}

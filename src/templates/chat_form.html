@@ -1,0 +1,241 @@
+<form class="chatInputForm" method="post" enctype="multipart/form-data" data-chat-form
+    action="{% if thread %}/chat/{{ thread.id }}/messages{% else %}/chat/new{% endif %}"
+    hx-post="{% if thread %}/chat/{{ thread.id }}/messages{% else %}/chat/new{% endif %}"
+    hx-target="{% if thread %}#messages{% else %}#chat-main{% endif %}"
+    hx-swap="{% if thread %}beforeend{% else %}outerHTML{% endif %}" data-chat-submit-debounce-ms="400"
+    data-chat-processing="{{ 'true' if has_processing_message else 'false' }}">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <div class="modelSelectRow">
+        <select id="assistant_id" name="assistant_id" class="selectField modelSelectInput" required>
+            {% set owned_assistants = assistants | selectattr("category", "equalto", "owned") | list %}
+            {% set system_assistants = assistants | selectattr("category", "equalto", "system_public") | list %}
+            {% set other_assistants = assistants | selectattr("category", "equalto", "other_public") | list %}
+            {% for label, grouped_assistants in [
+                ("Mine", owned_assistants),
+                ("System", system_assistants),
+                ("Shared", other_assistants),
+            ] %}
+            {% if grouped_assistants %}
+                <optgroup label="{{ label }}">
+                    {% for assistant in grouped_assistants %}
+                <option value="{{ assistant.id }}" data-allow-file-upload="{{ 'true' if assistant_upload_permissions.get(assistant.id) else 'false' }}" data-allowed-file-extensions="{{ assistant_allowed_file_extensions.get(assistant.id, []) | join(',') }}" {% if assistant.id == selected_assistant_id %}selected{% endif %}>{{ assistant.name }}{% if assistant.description %} - {{ assistant.description }}{% endif %}</option>
+                    {% endfor %}
+                </optgroup>
+            {% endif %}
+            {% endfor %}
+        </select>
+    </div>
+    <div class="chatComposer" data-chat-composer>
+        <input type="file" name="files" multiple accept="{{ selected_file_accept }}" data-chat-file-input hidden>
+        <div class="dropHint" data-chat-drop-hint aria-hidden="true">
+            <i class="fas fa-file-arrow-up" aria-hidden="true"></i>
+            <span data-chat-drop-extensions>{{ selected_file_accept }}</span>
+        </div>
+        <div class="attachmentList" data-chat-attachment-list hidden></div>
+        <div class="chatInputRow">
+            <label class="attachmentButton" data-chat-file-label>
+                <i class="fas fa-paperclip" aria-hidden="true"></i>
+            </label>
+            <textarea name="content" class="chatInputField" rows="1" placeholder="Message"
+                data-chat-input></textarea>
+            <button type="submit" class="sendButton iconButton" data-chat-send-button aria-label="Send message"
+                {% if has_processing_message %}disabled{% endif %}>
+                <i class="fas fa-paper-plane" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+    <style>
+  @scope {
+    :scope {
+        display: flex;
+        flex-direction: column;
+        gap: .6rem;
+    }
+
+    .modelSelectInput {
+        max-width: 24rem;
+    }
+
+    .chatComposer {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: .65rem;
+        padding: .75rem .85rem;
+        border: 1px solid var(--border-subtle);
+        border-radius: 1.2rem;
+        background: var(--bg-input);
+    }
+
+    .chatComposer.dropActive {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 8%, var(--bg-input));
+    }
+
+    .dropHint {
+        position: absolute;
+        inset: .45rem;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: .55rem;
+        padding: .9rem;
+        border: 1px dashed var(--accent);
+        border-radius: 1rem;
+        color: var(--accent);
+        background: color-mix(in srgb, var(--bg-input) 92%, transparent);
+        pointer-events: none;
+        font-size: 1.2rem;
+        z-index: 1;
+    }
+
+    .dropHint span {
+        max-width: min(28rem, 90%);
+        overflow-wrap: anywhere;
+        color: var(--accent);
+        font-size: .82rem;
+        font-weight: 600;
+    }
+
+    .chatComposer.dropActive .dropHint {
+        display: flex;
+    }
+
+    .attachmentList {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .55rem;
+    }
+
+    .attachmentList[hidden] {
+        display: none;
+    }
+
+    .attachmentButton {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: .4rem;
+        width: 2.3rem;
+        height: 2.3rem;
+        padding: 0;
+        border-radius: var(--radius-md);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: .9rem;
+        background: transparent;
+        flex: 0 0 auto;
+    }
+
+    .attachmentButton.disabled {
+        opacity: .45;
+        cursor: not-allowed;
+    }
+
+    .attachmentCard {
+        display: inline-grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-areas:
+            "preview name remove"
+            "preview meta remove";
+        align-items: center;
+        gap: .15rem .55rem;
+        max-width: min(100%, 18rem);
+        padding: .45rem;
+        border-radius: .95rem;
+        background: var(--bg-panel);
+        color: var(--text-main);
+    }
+
+    .attachmentPreview {
+        grid-area: preview;
+        width: 2.75rem;
+        height: 2.75rem;
+        border-radius: .7rem;
+        object-fit: cover;
+        background: rgba(0, 0, 0, .08);
+    }
+
+    .attachmentIcon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+    }
+
+    .attachmentName {
+        grid-area: name;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: .9rem;
+        font-weight: 600;
+    }
+
+    .attachmentMeta {
+        grid-area: meta;
+        min-width: 0;
+        color: var(--text-muted);
+        font-size: .76rem;
+    }
+
+    .attachmentRemoveButton {
+        grid-area: remove;
+        align-self: start;
+        border: 0;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+    }
+
+    .attachmentRemoveButton:hover,
+    .attachmentRemoveButton:focus-visible,
+    .attachmentButton:hover,
+    .attachmentButton:focus-visible {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        color: var(--accent);
+    }
+
+    .chatInputRow {
+        display: grid;
+        grid-template-columns: 2.3rem minmax(0, 1fr) 2.3rem;
+        align-items: center;
+        gap: .5rem;
+    }
+
+    .chatInputField {
+        resize: none;
+        overflow-y: hidden;
+        min-height: 2.3rem;
+        padding: .45rem 0;
+        border: 0;
+        background: transparent;
+        line-height: 1.4;
+    }
+
+    .sendButton {
+        border: 0;
+        background: transparent;
+        color: var(--send-icon);
+        cursor: pointer;
+        flex: 0 0 auto;
+        width: 2.3rem;
+        height: 2.3rem;
+        align-self: center;
+    }
+
+    .sendButton:hover,
+    .sendButton:focus-visible {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        color: var(--accent);
+    }
+
+    .chatInputField:focus,
+    .chatInputField:focus-visible {
+        outline: none;
+    }
+
+  }
+    </style>
+</form>

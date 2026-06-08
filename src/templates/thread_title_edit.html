@@ -1,0 +1,85 @@
+<form
+  id="thread-title"
+  class="threadTitleEdit"
+  data-thread-title-edit
+  data-thread-title-cancel-url="/chat/{{ thread.id }}"
+  method="post"
+  action="/chat/{{ thread.id }}/title"
+  hx-post="/chat/{{ thread.id }}/title"
+  hx-target="#thread-title"
+  hx-swap="outerHTML"
+>
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+  <div class="threadTitleCenter">
+    <label class="threadTitleField">
+      <span class="srOnly">Chat title</span>
+      <input
+        class="inputField"
+        type="text"
+        name="title"
+        value="{{ thread.title }}"
+        maxlength="80"
+        autofocus
+        data-select-on-focus="true"
+        data-thread-title-edit-input
+      >
+    </label>
+    <button class="threadTitleIconButton iconButton" type="submit" aria-label="Save title" title="Save title">
+      <i class="fas fa-check" aria-hidden="true"></i>
+    </button>
+  </div>
+  <style>
+    @scope {
+      :scope {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 1rem;
+      }
+
+      .threadTitleCenter {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: .45rem;
+        width: min(100%, 42rem);
+      }
+
+      .threadTitleField {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+
+      .threadTitleField .inputField {
+        width: 100%;
+        font-size: 1rem;
+        text-align: center;
+      }
+
+      .threadTitleIconButton {
+        flex: 0 0 auto;
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+      }
+
+      .threadTitleIconButton:hover,
+      .threadTitleIconButton:focus-visible {
+        background: var(--bg-sidebar-hover);
+        color: var(--accent-soft);
+      }
+
+      .srOnly {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+    }
+  </style>
+</form>

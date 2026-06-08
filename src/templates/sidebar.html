@@ -1,0 +1,169 @@
+<aside class="sidebar">
+  <div class="sidebarHeader">
+    <a class="button buttonSecondary fullWidth" href="/chat/new">
+      <i class="fas fa-plus"></i><span>New chat</span>
+    </a>
+  </div>
+  <div class="sidebarScroll">
+    <div class="sidebarSection">
+      <a class="sidebarActionLink" href="/assistants">
+        <i class="fas fa-sliders"></i><span>My Assistants</span>
+      </a>
+    </div>
+    <ul id="thread-list" class="plainList threadList">
+      {% for item in threads %}
+      {% include "thread_list_item.html" %}
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="sidebarFooter">
+    {% if user.is_admin %}
+    <a class="sidebarActionLink" href="/admin/users">
+      <i class="fas fa-users"></i><span>Users</span>
+    </a>
+    <a class="sidebarActionLink" href="/admin/base-assistants">
+      <i class="fas fa-wand-magic-sparkles"></i><span>Base Assistants</span>
+    </a>
+    <a class="sidebarActionLink" href="/admin/user-assistants">
+      <i class="fas fa-sliders"></i><span>User Assistants</span>
+    </a>
+    {% endif %}
+    <div class="sidebarAccountPanel">
+      <div class="sidebarUser">
+        <span class="sidebarUserName">{{ user.login_name }}</span>
+      </div>
+      <form class="sidebarLogoutForm" method="post" action="/logout">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}" />
+        <button
+          class="button buttonGhost iconOnlyButton"
+          type="submit"
+          title="Logout"
+          aria-label="Logout"
+        >
+          <i class="fas fa-right-from-bracket"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+  <style>
+    @scope {
+      .sidebarSection {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        margin-bottom: 0.85rem;
+      }
+      .sidebarActionLink {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        padding: 0.55rem 0.7rem;
+        border-radius: var(--radius-md);
+        color: var(--text-muted);
+      }
+      .sidebarActionLink:hover,
+      .sidebarActionLink:focus-visible {
+        background: var(--bg-sidebar-hover);
+        color: var(--text-main);
+      }
+      .sidebarAccountPanel {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.6rem 0.7rem 0.6rem 1.7rem;
+        margin-top: 0.35rem;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        background: var(--bg-input);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sidebarUser {
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        min-width: 0;
+        color: var(--text-muted);
+      }
+      .sidebarUserLabel {
+        font-size: 0.45rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .sidebarUserName {
+        font-weight: 600;
+        color: var(--text-main);
+        word-break: break-word;
+      }
+      .sidebarLogoutForm {
+        flex: 0 0 auto;
+        margin-left: auto;
+      }
+      .threadList {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+      .threadItem {
+        position: relative;
+        display: flex;
+        align-items: center;
+        border-radius: var(--radius-md);
+      }
+      .threadLink {
+        display: block;
+        flex: 1;
+        min-width: 0;
+        padding: 0.65rem 2.5rem 0.65rem 0.75rem;
+        border-radius: var(--radius-md);
+        color: var(--text-main);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .threadLink:hover,
+      .threadLink.active {
+        background: var(--bg-sidebar-hover);
+      }
+      .threadDeleteForm {
+        position: absolute;
+        right: 0.35rem;
+      }
+      .threadDeleteButton {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.8rem;
+        height: 1.8rem;
+        border: 0;
+        border-radius: var(--radius-md);
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 0.15s ease,
+          background-color 0.15s ease,
+          color 0.15s ease;
+      }
+      .threadItem:hover .threadDeleteButton,
+      .threadDeleteButton:focus-visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .threadDeleteButton:hover,
+      .threadDeleteButton:focus-visible {
+        background: #dc3545;
+        color: #fff;
+      }
+      .iconOnlyButton {
+        width: 2.4rem;
+        height: 2.4rem;
+        padding: 0;
+        justify-content: center;
+      }
+    }
+  </style>
+</aside>

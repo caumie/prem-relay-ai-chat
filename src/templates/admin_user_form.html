@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Edit User{% endblock %}
+{% block body %}
+<div class="appShell">
+  {% include "sidebar.html" %}
+  <main class="mainArea">
+    <div class="scrollRegion">
+      <div class="pageContainer">
+        <header class="pageHeader">
+          <div>
+            <h1 class="pageHeading">Edit User</h1>
+            <p class="mutedText">Update the login name, password, or role. Leave password blank to keep the current one.</p>
+          </div>
+          <div class="actionRow">
+            <a class="button buttonGhost" href="/admin/users">Back</a>
+          </div>
+        </header>
+        <section class="formPanel panelBody">
+          <form class="adminForm" method="post" action="/admin/users/{{ editing_user.id }}/edit">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <label>
+              <span class="inputLabel">User ID</span>
+              <input class="inputField" name="login_name" value="{{ editing_user.login_name }}" required>
+            </label>
+            <label>
+              <span class="inputLabel">Password</span>
+              <input class="inputField" name="password" type="password" placeholder="Leave blank to keep current password">
+            </label>
+            <label class="checkboxRow checkboxLabel">
+              <input class="checkboxInput" type="checkbox" name="is_admin" {% if editing_user.is_admin %}checked{% endif %}>
+              <span>Admin</span>
+            </label>
+            <p class="mutedText">Status: {{ "Suspended" if editing_user.suspended_at else "Active" }}</p>
+            <button class="button buttonPrimary" type="submit">Save</button>
+          </form>
+        </section>
+        <section class="formPanel panelBody">
+          <form class="dangerForm" method="post" action="/admin/users/{{ editing_user.id }}/delete" onsubmit="return confirm('Delete this user?');">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <div>
+              <h2 class="sectionHeading">Delete User</h2>
+              <p class="mutedText">This permanently removes the user, chats, attachments, and files.</p>
+            </div>
+            <button class="button buttonGhost dangerButton" type="submit">Delete</button>
+          </form>
+        </section>
+      </div>
+    </div>
+    <style>
+    @scope {
+      .adminForm {
+        display: grid;
+        gap: var(--space-base);
+        max-width: 32rem;
+      }
+
+      .dangerButton {
+        color: white;
+        background-color: #b42318;
+        border-color: #b42318;
+      }
+
+      .dangerForm {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--space-base);
+        align-items: center;
+      }
+    }
+    </style>
+  </main>
+</div>
+{% endblock %}

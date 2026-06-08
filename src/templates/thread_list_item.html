@@ -1,0 +1,28 @@
+<li
+  id="thread-item-{{ item.id }}"
+  class="threadItem"
+  {% if oob_swap is defined %}hx-swap-oob="{{ oob_swap }}"{% elif oob|default(false) %}hx-swap-oob="true"{% endif %}
+>
+  <a
+    class="threadLink{% if thread and item.id == thread.id %} active{% endif %}"
+    href="/chat/{{ item.id }}"
+  >
+    {{ item.title }}
+  </a>
+  <form
+    class="threadDeleteForm"
+    method="post"
+    action="/chat/{{ item.id }}/delete"
+    onsubmit="return confirm('Delete this thread?');"
+  >
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}" />
+    <button
+      class="threadDeleteButton"
+      type="submit"
+      title="Delete thread"
+      aria-label="Delete thread: {{ item.title }}"
+    >
+      <i class="fas fa-trash"></i>
+    </button>
+  </form>
+</li>

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "description": "Responses API provider for OpenAI models",
+      "api_mode": "responses",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "allowed_models": ["gpt-5", "gpt-5-mini"],
+      "default_options": {
+        "max_output_tokens": 2048,
+        "temperature": 0.7
+      }
+    },
+    {
+      "id": "ollama-local",
+      "name": "Ollama Local",
+      "description": "OpenAI-compatible local chat completions endpoint",
+      "api_mode": "chat_completions",
+      "base_url": "http://localhost:11434/v1",
+      "api_key": "dummy",
+      "allowed_models": ["llama3.1", "qwen2.5"],
+      "default_options": {
+        "max_tokens": 2048,
+        "temperature": 0.7
+      }
+    }
+  ]
+}

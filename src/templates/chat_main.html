@@ -1,0 +1,24 @@
+<main class="mainArea" id="chat-main">
+    <div class="scrollRegion" data-chat-scroll-region>
+        <div class="contentWidth">
+            {% if thread %}
+            {% include "thread_title_display.html" %}
+            {% endif %}
+            {% include "message_list.html" %}
+        </div>
+    </div>
+    <div class="chatInputDock">
+        <div class="contentWidth">
+            {% include "chat_form.html" %}
+        </div>
+    </div>
+    <style>
+  @scope {
+    .chatInputDock {
+        border-top: 1px solid var(--border-subtle);
+        background: var(--bg-body);
+        padding: .8rem .75rem 1rem;
+    }
+  }
+    </style>
+</main>

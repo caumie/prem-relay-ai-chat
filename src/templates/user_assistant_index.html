@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}My Assistants{% endblock %}
+{% block body %}
+<div class="appShell">
+  {% include "sidebar.html" %}
+  <main class="mainArea">
+    <div class="scrollRegion">
+      <div class="pageContainer">
+        <header class="pageHeader">
+          <div>
+            <h1 class="pageHeading">My Assistants</h1>
+            <p class="mutedText">Create and edit your prompt-based assistants.</p>
+          </div>
+          <div class="actionRow">
+            <a class="button buttonPrimary" href="/assistants/new">New</a>
+          </div>
+        </header>
+        <section class="cardGrid">
+          {% for assistant in assistants %}
+          <article class="assistantCard">
+            <div class="assistantCardBody">
+              <div class="assistantCardHeader">
+                <div>
+                  <h2 class="assistantTitle">{{ assistant.name }}</h2>
+                  <p class="mutedText">{{ assistant.description or "No description" }}</p>
+                </div>
+                <span class="pill mutedPill">{{ base_assistant_names.get(assistant.base_assistant_id, "Not set") }}</span>
+              </div>
+              <dl class="assistantMeta">
+                <div>
+                  <dt>Base Assistant</dt>
+                  <dd>{{ base_assistant_names.get(assistant.base_assistant_id, "Not set") }}</dd>
+                </div>
+                <div>
+                  <dt>Visibility</dt>
+                  <dd>{{ "Public" if assistant.visibility == "public" else "Private" }}</dd>
+                </div>
+              </dl>
+            </div>
+            <div class="assistantCardActions">
+              <a class="button buttonGhost" href="/assistants/{{ assistant.id }}/edit">Edit</a>
+              <form method="post" action="/assistants/{{ assistant.id }}/delete" onsubmit="return confirm('Delete this assistant?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <button class="button buttonGhost" type="submit">Delete</button>
+              </form>
+            </div>
+          </article>
+          {% endfor %}
+        </section>
+      </div>
+    </div>
+    <style>
+    @scope {
+      .cardGrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: var(--space-base);
+      }
+
+      .assistantCard {
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        background: linear-gradient(180deg, var(--bg-input), var(--bg-panel));
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 240px;
+      }
+
+      .assistantCardBody {
+        padding: var(--space-base);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-base);
+      }
+
+      .assistantCardHeader {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--space-base);
+        align-items: flex-start;
+      }
+
+      .assistantTitle {
+        margin: 0 0 0.15rem;
+        font-size: 1.15rem;
+      }
+
+      .assistantMeta {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin: 0;
+      }
+
+      .assistantMeta dt {
+        color: var(--text-muted);
+        font-size: 0.82rem;
+      }
+
+      .assistantMeta dd {
+        margin: 0.1rem 0 0;
+        font-weight: 600;
+      }
+
+      .assistantCardActions {
+        border-top: 1px solid var(--border-subtle);
+        padding: var(--space-snug) var(--space-base);
+        display: flex;
+        gap: var(--space-compact);
+        flex-wrap: wrap;
+      }
+    }
+    </style>
+  </main>
+</div>
+{% endblock %}

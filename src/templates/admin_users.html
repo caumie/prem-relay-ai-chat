@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Users Management{% endblock %}
+{% block body %}
+<div class="appShell">
+  {% include "sidebar.html" %}
+  <main class="mainArea">
+    <div class="scrollRegion">
+      <div class="pageContainer">
+        <header class="pageHeader">
+          <div>
+            <h1 class="pageHeading">Users Management</h1>
+          </div>
+        </header>
+        <section class="formPanel panelBody">
+          <form class="adminGridForm" method="post" action="/admin/users">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <input class="inputField" name="login_name" placeholder="User ID" required>
+            <input class="inputField" name="password" type="password" placeholder="Initial password" required>
+            <label class="checkboxRow checkboxLabel">
+              <input class="checkboxInput" type="checkbox" name="is_admin">
+              <span>Admin</span>
+            </label>
+            <button class="button buttonPrimary" type="submit">Add</button>
+          </form>
+        </section>
+        <section class="cardGrid">
+          {% for item in users %}
+          <article class="userCard">
+            <div class="userCardBody">
+              <div class="userCardHeader">
+                <div>
+                  <h2 class="userTitle">{{ item.login_name }}</h2>
+                  <p class="mutedText">ID {{ item.id }}</p>
+                </div>
+                <span class="pill mutedPill">{{ "Suspended" if item.suspended_at else "Active" }}</span>
+              </div>
+              <dl class="userMeta">
+                <div>
+                  <dt>Role</dt>
+                  <dd>{{ "Admin" if item.is_admin else "Member" }}</dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>{{ "Suspended" if item.suspended_at else "Active" }}</dd>
+                </div>
+              </dl>
+            </div>
+            <div class="userCardActions">
+              <a class="button buttonGhost" href="/admin/users/{{ item.id }}/edit">Edit</a>
+              {% if item.suspended_at is none %}
+              <form method="post" action="/admin/users/{{ item.id }}/suspend">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <button class="button buttonGhost" type="submit">Suspend</button>
+              </form>
+              {% endif %}
+            </div>
+          </article>
+          {% endfor %}
+        </section>
+      </div>
+    </div>
+    <style>
+    @scope {
+      .adminGridForm {
+        display: grid;
+        grid-template-columns: 1.4fr 1.2fr auto auto;
+        gap: var(--space-base);
+        align-items: center;
+      }
+
+      .cardGrid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: var(--space-base);
+      }
+
+      .userCard {
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        background: linear-gradient(180deg, var(--bg-input), var(--bg-panel));
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+      }
+
+      .userCardBody {
+        padding: var(--space-snug) var(--space-base);
+        display: grid;
+        grid-template-columns: minmax(12rem, 1.3fr) minmax(14rem, 1fr);
+        gap: var(--space-base);
+        align-items: center;
+      }
+
+      .userCardHeader {
+        display: flex;
+        gap: var(--space-compact);
+        align-items: center;
+      }
+
+      .userTitle {
+        margin: 0;
+        font-size: 1.15rem;
+      }
+
+      .userMeta {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin: 0;
+      }
+
+      .userMeta dt {
+        color: var(--text-muted);
+        font-size: 0.82rem;
+      }
+
+      .userMeta dd {
+        margin: 0.1rem 0 0;
+        font-weight: 600;
+      }
+
+      .userCardActions {
+        border-left: 1px solid var(--border-subtle);
+        padding: var(--space-snug) var(--space-base);
+        display: flex;
+        gap: var(--space-compact);
+        flex-wrap: wrap;
+      }
+
+      @media (max-width: 900px) {
+        .adminGridForm {
+          grid-template-columns: 1fr;
+        }
+
+        .userCard {
+          grid-template-columns: 1fr;
+        }
+
+        .userCardBody {
+          grid-template-columns: 1fr;
+        }
+
+        .userCardActions {
+          border-left: 0;
+          border-top: 1px solid var(--border-subtle);
+        }
+      }
+    }
+    </style>
+  </main>
+</div>
+{% endblock %}

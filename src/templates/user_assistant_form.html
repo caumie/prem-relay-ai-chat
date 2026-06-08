@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit Assistant" if assistant else "Create Assistant" }}{% endblock %}
+{% block body %}
+<div class="appShell">
+  {% include "sidebar.html" %}
+  <main class="mainArea">
+    <div class="scrollRegion">
+      <div class="pageContainer">
+        <header class="pageHeader">
+          <div>
+            <h1 class="pageHeading">{{ "Edit Assistant" if assistant else "Create Assistant" }}</h1>
+          </div>
+          <div class="actionRow">
+            <a class="button buttonGhost" href="/assistants">Back</a>
+          </div>
+        </header>
+        <section class="formPanel panelBody">
+          <form class="assistantFormStack" method="post" action="{% if assistant %}/assistants/{{ assistant.id }}/edit{% else %}/assistants/new{% endif %}">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <div class="assistantFormColumns">
+              <div class="formField">
+                <label class="labelText" for="name">Name</label>
+                <input class="inputField" id="name" name="name" value="{{ assistant.name if assistant else '' }}" placeholder="Name" required>
+              </div>
+              <div class="formField assistantFormWide">
+                <label class="labelText" for="description">Description</label>
+                <input class="inputField" id="description" name="description" value="{{ assistant.description if assistant else '' }}" placeholder="Description">
+              </div>
+              <div class="formField">
+                <label class="labelText" for="base_assistant_id">Base Assistant</label>
+                <select class="selectField" id="base_assistant_id" name="base_assistant_id" required>
+                  <option value="" {% if not assistant or not assistant.base_assistant_id %}selected{% endif %}>&lt;not set&gt;</option>
+                  {% for base in base_assistants %}
+                  <option value="{{ base.id }}" {% if assistant and assistant.base_assistant_id == base.id %}selected{% endif %}>{{ base.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <div class="formField">
+              <div class="assistantPromptHeader">
+                <label class="labelText">User Prompts</label>
+                <button class="button buttonGhost" type="button" data-add-user-prompt>+ Prompt</button>
+              </div>
+              <div class="assistantPromptList" data-user-prompts>
+                {% for prompt in user_prompts %}
+                <textarea class="inputField assistantTextarea" name="user_prompts" rows="5" placeholder="例：短く返答します">{{ prompt }}</textarea>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="assistantFormColumns assistantFormCompact">
+              <div class="formField">
+                <label class="labelText" for="visibility">Visibility</label>
+                <select class="selectField" id="visibility" name="visibility">
+                  <option value="private" {% if not assistant or assistant.visibility == 'private' %}selected{% endif %}>Private (owner only)</option>
+                  <option value="public" {% if assistant and assistant.visibility == 'public' %}selected{% endif %}>Public (all users)</option>
+                </select>
+              </div>
+            </div>
+            <div class="formActions">
+              <button class="button buttonPrimary" type="submit">{{ "Save" if assistant else "Create" }}</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+    <style>
+    @scope {
+      .assistantFormStack {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-base);
+      }
+
+      .assistantFormColumns {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--space-base);
+      }
+
+      .assistantFormWide {
+        grid-column: 1 / -1;
+      }
+
+      .assistantFormCompact {
+        grid-template-columns: 1.2fr 1fr;
+        align-items: end;
+      }
+
+      .assistantTextarea {
+        min-height: 9rem;
+        resize: vertical;
+      }
+
+      .assistantPromptHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-compact);
+        margin-bottom: var(--space-compact);
+      }
+
+      .assistantPromptList {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-compact);
+      }
+
+      @media (max-width: 900px) {
+        .assistantFormColumns,
+        .assistantFormCompact {
+          grid-template-columns: 1fr;
+        }
+      }
+    }
+    </style>
+  </main>
+</div>
+<script>
+  (() => {
+    const promptList = document.querySelector("[data-user-prompts]");
+    const addPrompt = document.querySelector("[data-add-user-prompt]");
+    addPrompt?.addEventListener("click", () => {
+      const textarea = document.createElement("textarea");
+      textarea.className = "inputField assistantTextarea";
+      textarea.name = "user_prompts";
+      textarea.rows = 5;
+      textarea.placeholder = "例：短く返答します";
+      promptList?.append(textarea);
+      textarea.focus();
+    });
+  })();
+</script>
+{% endblock %}
