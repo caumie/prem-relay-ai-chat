@@ -1,4 +1,3 @@
-
 """CSRFトークンの生成、保持、検証を扱うHTTP境界ヘルパー。"""
 
 import secrets
@@ -11,7 +10,7 @@ from starlette.types import ASGIApp
 CSRF_SESSION_KEY = "csrf_token"
 CSRF_FORM_FIELD = "_csrf_token"
 CSRF_TOKEN_BYTES = 32
-CSRF_EXCLUDED_PATH_PREFIXES = ("/static/", "/assets/")
+CSRF_EXCLUDED_PATH_PREFIXES = ("/static/",)
 
 
 def ensure_csrf_token(request: Request) -> str:
@@ -47,6 +46,10 @@ def verify_csrf_token(
         )
 
 
+def _new_csrf_token() -> str:
+    return secrets.token_urlsafe(CSRF_TOKEN_BYTES)
+
+
 class CsrfTokenMiddleware(BaseHTTPMiddleware):
     """GET時にCSRFトークンを用意して、どのHTML入口からでもformを描画できるようにする。"""
 
@@ -61,7 +64,3 @@ class CsrfTokenMiddleware(BaseHTTPMiddleware):
         ):
             ensure_csrf_token(request)
         return await call_next(request)
-
-
-def _new_csrf_token() -> str:
-    return secrets.token_urlsafe(CSRF_TOKEN_BYTES)

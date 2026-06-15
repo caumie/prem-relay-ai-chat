@@ -4,16 +4,18 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from fastapi.templating import Jinja2Templates
+from src.presentation.test_support import started_test_client
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 
-from src.infrastructure import AttachmentStorage, Database
+from src.infrastructure import Database
 from src.models import LlmMessage
 from src.presentation import register_web_routes
-from src.service.response_service import ResponseService, StreamEvent
-from src.usecase.context import UsecaseContext
+from src.presentation.runtime import init_presentation_runtime
+from src.service.response_service import StreamEvent
+from src.config import AppConfig
+from src.usecase.runtime import init_usecase_runtime
 
 
 class FakeResponder:
@@ -38,28 +40,24 @@ def test_register_web_routes_registers_routes_and_auth_dependencies(
     app.add_middleware(SessionMiddleware, secret_key="test-secret")
     database = Database(tmp_path / "chat.sqlite")
     database.initialize()
-    storage = AttachmentStorage(tmp_path / "uploads")
-    response_service = ResponseService(database=database, responder=FakeResponder())
-
-    register_web_routes(
-        app,
-        templates=Jinja2Templates(directory="src/templates"),
-        usecase_context=UsecaseContext(
-            database=database,
-            password_pepper="test-secret",
-            response_service=response_service,
+    init_usecase_runtime(
+        config=AppConfig(
+            db_path=tmp_path / "chat.sqlite",
+            data_dir=tmp_path,
             uploads_dir=tmp_path / "uploads",
-            attachment_storage=storage,
-            load_connection_providers=lambda: [],
+            session_secret="test-secret",
+            password_pepper="test-pepper",
         ),
-        response_service=response_service,
-        attachment_storage=storage,
+        responder=FakeResponder(),
     )
+    init_presentation_runtime(templates=Jinja2Templates(directory="src/templates"))
+
+    register_web_routes(app)
 
     paths = _route_paths(app.routes)
-    response = TestClient(app, follow_redirects=False).get("/chat")
+    response = started_test_client(app, follow_redirects=False).get("/chat")
 
-    assert {"/login", "/chat", "/assistants", "/admin/users"} <= paths
+    assert {"/login", "/setup/admin", "/chat", "/assistants", "/admin/users"} <= paths
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
 

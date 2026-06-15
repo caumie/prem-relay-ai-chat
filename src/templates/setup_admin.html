@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Initial Admin Setup{% endblock %}
+{% block body %}
+<div class="authShell">
+    <div class="panel authCard">
+        <div class="panelBody">
+            <h1 class="authTitle">Initial Admin Setup</h1>
+            <p class="authDescription">Create the first administrator account.</p>
+            {% if error %}<div class="inlineAlert alertDanger">User ID and password are required.</div>{% endif %}
+            <form method="post" action="/setup/admin" class="formStack">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <div class="formField">
+                    <label class="labelText" for="login_name">User ID</label>
+                    <input id="login_name" name="login_name" class="inputField" value="{{ login_name }}" placeholder="User ID" required autofocus>
+                </div>
+                <div class="formField">
+                    <label class="labelText" for="password">Password</label>
+                    <input id="password" name="password" class="inputField" type="password" placeholder="Password" required>
+                </div>
+                <button class="button buttonPrimary fullWidth" type="submit">Create Admin</button>
+            </form>
+        </div>
+    </div>
+    <style>
+  @scope {
+    :scope {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+    }
+
+    .authCard {
+        min-width: 320px;
+        max-width: 420px;
+    }
+
+    .authTitle,
+    .authDescription {
+        text-align: center;
+    }
+
+    .authDescription {
+        color: var(--text-muted);
+    }
+  }
+    </style>
+</div>
+{% endblock %}

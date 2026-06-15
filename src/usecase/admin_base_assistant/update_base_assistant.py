@@ -12,11 +12,10 @@ from ...models import (
     normalize_file_extensions,
 )
 from ..assistant.errors import AssistantUsecaseError
-from ..context import UsecaseContext
+from . import AdminBaseAssistantUsecaseContext, admin_base_assistant_usecase_context
 
 
 def update_base_assistant(
-    context: UsecaseContext,
     *,
     actor: User,
     base_assistant_id: str,
@@ -30,6 +29,7 @@ def update_base_assistant(
     allow_file_upload: bool,
     generation_config: AssistantGenerationConfig,
     allowed_file_extensions: list[str] | None = None,
+    context: AdminBaseAssistantUsecaseContext | None = None,
 ) -> BaseAssistant:
     """管理者入力を検証し、既存 BaseAssistant を更新して返す。
 
@@ -52,8 +52,9 @@ def update_base_assistant(
 
     編集画面から渡された入力だけで更新処理を独立して完結させるため。
     """
+    ctx = context if context is not None else admin_base_assistant_usecase_context()
     _require_admin(actor)
-    providers = context.load_connection_providers()
+    providers = ctx.load_connection_providers()
     _validate_fields(
         providers=providers,
         connection_provider_id=connection_provider_id,
@@ -61,7 +62,7 @@ def update_base_assistant(
         model=model,
         max_history_messages=max_history_messages,
     )
-    with context.database.connect() as conn:
+    with ctx.database.connect() as conn:
         repo = BaseAssistantRepository(conn)
         if repo.get(base_assistant_id) is None:
             raise AssistantUsecaseError("base assistant not found")

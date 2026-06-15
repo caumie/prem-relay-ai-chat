@@ -7,10 +7,9 @@
       "description": "Responses API provider for OpenAI models",
       "api_mode": "responses",
       "base_url": "https://api.openai.com/v1",
-      "api_key_env": "OPENAI_API_KEY",
+      "api_key": "replace-with-your-openai-api-key",
       "allowed_models": ["gpt-5", "gpt-5-mini"],
       "default_options": {
-        "max_output_tokens": 2048,
         "temperature": 0.7
       }
     },
@@ -23,7 +22,6 @@
       "api_key": "dummy",
       "allowed_models": ["llama3.1", "qwen2.5"],
       "default_options": {
-        "max_tokens": 2048,
         "temperature": 0.7
       }
     }

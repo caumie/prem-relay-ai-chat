@@ -1,16 +1,14 @@
 import asyncio
 import sqlite3
-from collections.abc import Coroutine
+from collections.abc import AsyncIterator, Coroutine
 from io import BytesIO
 from pathlib import Path
 from typing import Any, TypeVar
 from uuid import uuid4
 
 import pytest
-from fastapi import UploadFile
-from starlette.datastructures import Headers
 
-from ...auth_password import hash_password
+from ...service.password import hash_password
 from ...config import load_connection_providers
 from ...infrastructure import (
     AuthRepository,
@@ -25,17 +23,18 @@ from ...infrastructure import (
 from ...models import (
     AssistantGenerationConfig,
     BaseAssistant,
-    PendingUpload,
     LlmMessage,
     Message,
     MessageRole,
     MessageStatus,
+    PendingUpload,
     ResolvedAssistant,
     Thread,
     User,
     UserInputError,
 )
-from ..context import UsecaseContext
+from ...service.response_service import StreamEvent
+from . import ChatUsecaseContext
 from . import (
     ChatUsecaseError,
     build_chat_page,
@@ -43,9 +42,12 @@ from . import (
     create_chat,
     add_message,
     delete_thread,
+    get_attachment_download,
+    prepare_response_stream,
     get_thread_detail,
     rename_thread,
     save_message_attachments,
+    stream_response_events,
 )
 
 T = TypeVar("T")
@@ -56,6 +58,7 @@ class FakeResponseService:
         self.started: list[tuple[int, list[LlmMessage], ResolvedAssistant]] = []
         self.cancelled: list[int] = []
         self.cancel_result = False
+        self.events: list[StreamEvent] = []
 
     def start_response(
         self,
@@ -70,6 +73,10 @@ class FakeResponseService:
         self.cancelled.append(message_id)
         return self.cancel_result
 
+    async def stream_events(self, message: Message) -> AsyncIterator[StreamEvent]:
+        for event in self.events:
+            yield event
+
 
 def test_create_chat_creates_thread_messages_and_starts_response(
     tmp_path: Path,
@@ -81,7 +88,7 @@ def test_create_chat_creates_thread_messages_and_starts_response(
 
     result = run_async(
         create_chat(
-            context,
+            context=context,
             user_id=user_id,
             content="  hello  ",
             assistant_id=assistant_id,
@@ -106,21 +113,23 @@ def test_create_chat_creates_thread_messages_and_starts_response(
 
 def test_add_message_requires_owned_thread(tmp_path: Path) -> None:
     # 観点: 他ユーザーまたは存在しないthreadへメッセージ追加できないこと。
-    # 目的: 認可付きthread取得をpresentationではなくチャット操作境界に置く。
+    # 目的: 認可付きthread取得を添付保存より前のチャット操作境界に置く。
     context, user_id, assistant_id, response_service = _context_with_user(tmp_path)
 
     with pytest.raises(ChatUsecaseError):
         run_async(
             add_message(
-                context,
+                context=context,
                 user_id=user_id,
                 thread_id="missing",
                 content="hello",
                 assistant_id=assistant_id,
+                uploads=[_pending_upload("photo.jpg", b"image", "image/jpeg")],
             )
         )
 
     assert response_service.started == []
+    assert not any(tmp_path.glob(f"{user_id}/*"))
 
 
 def test_add_message_appends_messages_and_starts_response(tmp_path: Path) -> None:
@@ -130,7 +139,7 @@ def test_add_message_appends_messages_and_starts_response(tmp_path: Path) -> Non
     database = context.database
     created = run_async(
         create_chat(
-            context,
+            context=context,
             user_id=user_id,
             content="first",
             assistant_id=assistant_id,
@@ -140,7 +149,7 @@ def test_add_message_appends_messages_and_starts_response(tmp_path: Path) -> Non
 
     result = run_async(
         add_message(
-            context,
+            context=context,
             user_id=user_id,
             thread_id=created.thread.id,
             content="second",
@@ -170,7 +179,10 @@ def test_create_chat_rejects_blank_content(tmp_path: Path) -> None:
     with pytest.raises(UserInputError):
         run_async(
             create_chat(
-                context, user_id=user_id, content="  \n", assistant_id=assistant_id
+                context=context,
+                user_id=user_id,
+                content="  \n",
+                assistant_id=assistant_id,
             )
         )
 
@@ -186,7 +198,7 @@ def test_create_chat_allows_attachment_only_message(tmp_path: Path) -> None:
     database = context.database
     result = run_async(
         create_chat(
-            context,
+            context=context,
             user_id=user_id,
             content=" ",
             assistant_id=assistant_id,
@@ -203,12 +215,12 @@ def test_create_chat_allows_attachment_only_message(tmp_path: Path) -> None:
     assert response_service.started
 
 
-def test_create_chat_rolls_back_attachment_metadata_when_message_save_fails(
+def test_create_chat_removes_attachment_when_message_save_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 観点: 添付metadataとmessage保存が同じtransactionで失敗時に巻き戻ること。
-    # 目的: 投稿usecase内のDB副作用を分割commitせず一貫した境界にする。
+    # 観点: message保存失敗時は添付metadataと実ファイルが残らないこと。
+    # 目的: DB rollbackとファイル補償を投稿usecaseの一貫した失敗境界にする。
     context, user_id, assistant_id, _ = _context_with_user(tmp_path)
     database = context.database
 
@@ -223,7 +235,7 @@ def test_create_chat_rolls_back_attachment_metadata_when_message_save_fails(
     with pytest.raises(RuntimeError):
         run_async(
             create_chat(
-                context,
+                context=context,
                 user_id=user_id,
                 content="hello",
                 assistant_id=assistant_id,
@@ -235,6 +247,50 @@ def test_create_chat_rolls_back_attachment_metadata_when_message_save_fails(
         rows = conn.execute("select count(*) as count from attachments").fetchone()
     assert rows is not None
     assert rows["count"] == 0
+    assert not any(tmp_path.glob(f"{user_id}/*"))
+
+
+def test_add_message_removes_uploaded_file_when_message_save_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 観点: 既存threadへの投稿保存失敗時は添付metadataと実ファイルが残らないこと。
+    # 目的: DB rollbackでは戻せないファイル実体を投稿usecaseの補償処理で削除する。
+    context, user_id, assistant_id, _ = _context_with_user(tmp_path)
+    created = run_async(
+        create_chat(
+            context=context,
+            user_id=user_id,
+            content="first",
+            assistant_id=assistant_id,
+        )
+    )
+
+    def fail_message_save(self: object, message: Message) -> Message:
+        raise RuntimeError("message save failed")
+
+    monkeypatch.setattr(
+        "src.usecase.chat._support.MessageRepository.save",
+        fail_message_save,
+    )
+
+    with pytest.raises(RuntimeError, match="message save failed"):
+        run_async(
+            add_message(
+                context=context,
+                user_id=user_id,
+                thread_id=created.thread.id,
+                content="second",
+                assistant_id=assistant_id,
+                uploads=[_pending_upload("photo.jpg", b"image", "image/jpeg")],
+            )
+        )
+
+    with context.database.connect() as conn:
+        rows = conn.execute("select count(*) as count from attachments").fetchone()
+    assert rows is not None
+    assert rows["count"] == 0
+    assert not any(tmp_path.glob(f"{user_id}/*"))
 
 
 def test_build_chat_page_selects_last_used_assistant(tmp_path: Path) -> None:
@@ -258,7 +314,7 @@ def test_build_chat_page_selects_last_used_assistant(tmp_path: Path) -> None:
         conn.commit()
     created = run_async(
         create_chat(
-            context,
+            context=context,
             user_id=user_id,
             content="first",
             assistant_id=first_assistant_id,
@@ -267,7 +323,7 @@ def test_build_chat_page_selects_last_used_assistant(tmp_path: Path) -> None:
     response_service.started.clear()
     run_async(
         add_message(
-            context,
+            context=context,
             user_id=user_id,
             thread_id=created.thread.id,
             content="second",
@@ -275,7 +331,7 @@ def test_build_chat_page_selects_last_used_assistant(tmp_path: Path) -> None:
         )
     )
 
-    page = build_chat_page(context, user_id=user_id, thread_id=created.thread.id)
+    page = build_chat_page(context=context, user_id=user_id, thread_id=created.thread.id)
 
     assert page is not None
     assert page.selected_assistant_id == last_assistant.id
@@ -291,7 +347,7 @@ def test_build_chat_page_exposes_assistant_allowed_file_extensions(
         allowed_file_extensions=["txt", "md"],
     )
 
-    page = build_chat_page(context, user_id=user_id)
+    page = build_chat_page(context=context, user_id=user_id)
 
     assert page is not None
     assert page.assistant_allowed_file_extensions[assistant_id] == ["txt", "md"]
@@ -303,16 +359,16 @@ def test_delete_thread_requires_owned_thread_and_hides_it(tmp_path: Path) -> Non
     context, user_id, assistant_id, _ = _context_with_user(tmp_path)
     created = run_async(
         create_chat(
-            context,
+            context=context,
             user_id=user_id,
             content="first",
             assistant_id=assistant_id,
         )
     )
 
-    deleted = delete_thread(context, user_id=user_id, thread_id=created.thread.id)
+    deleted = delete_thread(context=context, user_id=user_id, thread_id=created.thread.id)
     missing = get_thread_detail(
-        context, thread_id=created.thread.id, user_id=user_id
+        context=context, thread_id=created.thread.id, user_id=user_id
     )
 
     assert deleted is True
@@ -320,7 +376,7 @@ def test_delete_thread_requires_owned_thread_and_hides_it(tmp_path: Path) -> Non
     with pytest.raises(ChatUsecaseError):
         run_async(
             add_message(
-                context,
+                context=context,
                 user_id=user_id,
                 thread_id=created.thread.id,
                 content="second",
@@ -336,7 +392,7 @@ def test_rename_thread_updates_owned_thread_title(tmp_path: Path) -> None:
     database = context.database
     created = run_async(
         create_chat(
-            context,
+            context=context,
             user_id=user_id,
             content="first",
             assistant_id=assistant_id,
@@ -344,7 +400,7 @@ def test_rename_thread_updates_owned_thread_title(tmp_path: Path) -> None:
     )
 
     renamed = rename_thread(
-        context,
+        context=context,
         user_id=user_id,
         thread_id=created.thread.id,
         title="  renamed title  ",
@@ -387,7 +443,7 @@ def test_cancel_response_marks_processing_message_failed_when_no_running_job(
 
     run_async(
         cancel_response(
-            context,
+            context=context,
             user_id=user_id,
             thread_id=thread.id,
             message_id=assistant.id,
@@ -400,6 +456,79 @@ def test_cancel_response_marks_processing_message_failed_when_no_running_job(
     assert message.status is MessageStatus.FAILED
 
 
+def test_stream_response_events_returns_runtime_stream_after_ownership_check(
+    tmp_path: Path,
+) -> None:
+    # 観点: SSE購読は所有者検証と応答開始保証の後にresponse serviceへ委譲すること。
+    # 目的: presentationが応答開始条件やservice直接呼び出しを持たずに済む境界を固定する。
+    context, user_id, assistant_id, response_service = _context_with_user(tmp_path)
+    database = context.database
+    response_service.events = [
+        StreamEvent("status", message_id=2, status="streaming"),
+        StreamEvent("delta", message_id=2, delta="hello"),
+        StreamEvent("done", message_id=2),
+    ]
+    created = run_async(
+        create_chat(
+            context=context,
+            user_id=user_id,
+            content="hello",
+            assistant_id=assistant_id,
+        )
+    )
+    response_service.started.clear()
+
+    response_message = prepare_response_stream(
+        context=context,
+        user_id=user_id,
+        thread_id=created.thread.id,
+        response_id=created.assistant_message.id,
+    )
+
+    events = run_async(
+        _collect_stream(
+            stream_response_events(
+                context=context,
+                response_message=response_message,
+            )
+        )
+    )
+
+    with database.connect() as conn:
+        stored = MessageRepository(conn).get(created.assistant_message.id)
+    assert [event.type for event in events] == ["status", "delta", "done"]
+    assert response_service.started[0][0] == created.assistant_message.id
+    assert stored.id == created.assistant_message.id
+
+
+def test_get_attachment_download_returns_owned_file_response_metadata(
+    tmp_path: Path,
+) -> None:
+    # 観点: 添付ダウンロードは所有者検証済みmetadataと実ファイルパスをまとめて返すこと。
+    # 目的: presentationがattachment storageや保存相対パス解決を直接持たない境界を固定する。
+    context, user_id, assistant_id, _ = _context_with_user(tmp_path)
+
+    attachments = run_async(
+        save_message_attachments(
+            context=context,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            uploads=[_pending_upload("photo.jpg", b"image", "image/jpeg")],
+        )
+    )
+
+    download = get_attachment_download(
+        context=context,
+        attachment_id=attachments[0].id,
+        user_id=user_id,
+    )
+
+    assert download is not None
+    assert download.filename == "photo.jpg"
+    assert download.media_type == "image/jpeg"
+    assert download.path.read_bytes() == b"image"
+
+
 def test_save_message_attachments_persists_allowed_upload(tmp_path: Path) -> None:
     # 観点: 添付許可されたassistantでは許可拡張子のファイル実体とmetadataを保存できること。
     # 目的: assistant別の添付ポリシーとtransactionをpresentationではなくchat usecaseへ閉じる。
@@ -409,7 +538,7 @@ def test_save_message_attachments_persists_allowed_upload(tmp_path: Path) -> Non
 
     attachments = asyncio.run(
         save_message_attachments(
-            context,
+            context=context,
             user_id=user_id,
             assistant_id=assistant_id,
             uploads=[upload],
@@ -427,6 +556,33 @@ def test_save_message_attachments_persists_allowed_upload(tmp_path: Path) -> Non
     assert (tmp_path / attachments[0].stored_path).read_bytes() == b"image"
 
 
+def test_save_message_attachments_removes_prior_file_when_later_save_fails(
+    tmp_path: Path,
+) -> None:
+    # 観点: 複数添付の途中で保存に失敗しても先に保存した実ファイルが残らないこと。
+    # 目的: 添付保存処理単体でも部分成功による孤児ファイルを作らない。
+    context, user_id, assistant_id, _ = _context_with_user(tmp_path)
+
+    with pytest.raises(UserInputError, match="attachment is empty"):
+        run_async(
+            save_message_attachments(
+                context=context,
+                user_id=user_id,
+                assistant_id=assistant_id,
+                uploads=[
+                    _pending_upload("first.jpg", b"image", "image/jpeg"),
+                    _pending_upload("second.jpg", b"", "image/jpeg"),
+                ],
+            )
+        )
+
+    with context.database.connect() as conn:
+        rows = conn.execute("select count(*) as count from attachments").fetchone()
+    assert rows is not None
+    assert rows["count"] == 0
+    assert not any(tmp_path.glob(f"{user_id}/*"))
+
+
 def test_save_message_attachments_rejects_extension_outside_assistant_policy(
     tmp_path: Path,
 ) -> None:
@@ -437,7 +593,7 @@ def test_save_message_attachments_rejects_extension_outside_assistant_policy(
     with pytest.raises(UserInputError, match="file extension is not allowed"):
         asyncio.run(
             save_message_attachments(
-                context,
+                context=context,
                 user_id=user_id,
                 assistant_id=assistant_id,
                 uploads=[_pending_upload("memo.txt", b"hello", "text/plain")],
@@ -462,7 +618,7 @@ def test_save_message_attachments_accepts_assistant_custom_extension(
 
     attachments = asyncio.run(
         save_message_attachments(
-            context,
+            context=context,
             user_id=user_id,
             assistant_id=assistant_id,
             uploads=[_pending_upload("memo.txt", b"hello", "text/plain")],
@@ -486,7 +642,7 @@ def test_save_message_attachments_rejects_disallowed_assistant_without_side_effe
     with pytest.raises(UserInputError):
         asyncio.run(
             save_message_attachments(
-                context,
+                context=context,
                 user_id=user_id,
                 assistant_id=assistant_id,
                 uploads=[_pending_upload("memo.txt", b"hello", "text/plain")],
@@ -505,7 +661,7 @@ def _context_with_user(
     *,
     allow_file_upload: bool = True,
     allowed_file_extensions: list[str] | None = None,
-) -> tuple[UsecaseContext, int, str, FakeResponseService]:
+) -> tuple[ChatUsecaseContext, int, str, FakeResponseService]:
     database = Database(tmp_path / "chat.sqlite")
     database.initialize()
     with database.connect() as conn:
@@ -543,9 +699,8 @@ def _context_with_user(
         encoding="utf-8",
     )
     response_service = FakeResponseService()
-    context = UsecaseContext(
+    context = ChatUsecaseContext(
         database=database,
-        password_pepper="pepper",
         response_service=response_service,
         uploads_dir=tmp_path,
         attachment_storage=AttachmentStorage(tmp_path),
@@ -554,22 +709,27 @@ def _context_with_user(
     return context, user.id, created.id, response_service
 
 
-def _upload(filename: str, body: bytes, content_type: str) -> UploadFile:
-    return UploadFile(
-        BytesIO(body),
-        filename=filename,
-        headers=Headers({"content-type": content_type}),
-    )
-
-
 def _pending_upload(filename: str, body: bytes, content_type: str) -> PendingUpload:
-    upload = _upload(filename, body, content_type)
+    stream = BytesIO(body)
+
+    async def read(size: int) -> bytes:
+        return stream.read(size)
+
+    async def close() -> None:
+        stream.close()
+
     return PendingUpload(
-        filename=upload.filename or "",
-        content_type=upload.content_type or "",
-        read=upload.read,
-        close=upload.close,
+        filename=filename,
+        content_type=content_type,
+        read=read,
+        close=close,
     )
+
+
+async def _collect_stream(
+    stream: AsyncIterator[StreamEvent],
+) -> list[StreamEvent]:
+    return [event async for event in stream]
 
 
 def run_async(awaitable: Coroutine[Any, Any, T]) -> T:
@@ -582,8 +742,9 @@ def save_user(
     login_name: str,
     password: str,
 ) -> User:
-    return AuthRepository(conn).save(
-        User(id=0, login_name=login_name),
+    return AuthRepository(conn).create(
+        login_name=login_name,
+        is_admin=False,
         password_hash=hash_password(password, password_pepper),
     )
 

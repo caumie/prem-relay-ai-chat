@@ -1,13 +1,12 @@
 """admin 向け BaseAssistant 管理画面の HTML router を担当する。"""
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from json import JSONDecodeError, dumps, loads
 import re
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from ...models import (
     AssistantGenerationConfig,
@@ -28,14 +27,10 @@ from ...usecase.admin_base_assistant.list_connection_providers import (
 )
 from ...usecase.admin_base_assistant.update_base_assistant import update_base_assistant
 from ...usecase.assistant import AssistantUsecaseError
-from ...usecase.context import UsecaseContext
+from ..context import current_admin, presentation_templates, shell_context
 from ..util.csrf import verify_csrf_token
 
 router = APIRouter()
-templates: Jinja2Templates | None = None
-_current_admin: Callable[[Request], Awaitable[User]] | None = None
-_shell_context: Callable[[Request, User], dict[str, object]] | None = None
-_usecase_context: UsecaseContext | None = None
 
 
 class BaseAssistantFormPayload(TypedDict):
@@ -52,59 +47,20 @@ class BaseAssistantFormPayload(TypedDict):
     allowed_file_extensions: list[str]
     generation_config: AssistantGenerationConfig
 
-
-def configure_admin_base_assistant_routes(
-    *,
-    usecase_context: UsecaseContext,
-    current_admin: Callable[[Request], Awaitable[User]],
-    shell_context: Callable[[Request, User], dict[str, object]],
-) -> None:
-    """admin base assistant router で使う依存関係を設定する。"""
-    global _current_admin, _shell_context, _usecase_context
-    _usecase_context = usecase_context
-    _current_admin = current_admin
-    _shell_context = shell_context
-
-
-async def _current_admin_dependency(request: Request) -> User:
-    if _current_admin is None:
-        raise RuntimeError("Admin base assistant current_admin is not configured")
-    return await _current_admin(request)
-
-
-def _templates() -> Jinja2Templates:
-    if templates is None:
-        raise RuntimeError("Admin base assistant templates are not configured")
-    return templates
-
-
-def _shell_page_context(request: Request, user: User) -> dict[str, object]:
-    if _shell_context is None:
-        raise RuntimeError("Admin base assistant shell_context is not configured")
-    return _shell_context(request, user)
-
-
-def _context() -> UsecaseContext:
-    """admin base assistant routerで利用するusecase contextを返す。"""
-    if _usecase_context is None:
-        raise RuntimeError("Admin base assistant usecase context is not configured")
-    return _usecase_context
-
-
 @router.get("/admin/base-assistants", response_class=HTMLResponse)
 async def admin_base_assistants(
     request: Request,
-    admin: User = Depends(_current_admin_dependency),
+    admin: User = Depends(current_admin),
 ) -> HTMLResponse:
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "base_assistant_index.html",
         {
-            **_shell_page_context(request, admin),
-            "assistants": list_base_assistants(_context()),
+            **shell_context(request, admin),
+            "assistants": list_base_assistants(),
             "connection_provider_names": {
                 provider.id: provider.name
-                for provider in list_connection_providers(_context())
+                for provider in list_connection_providers()
             },
         },
     )
@@ -113,15 +69,15 @@ async def admin_base_assistants(
 @router.get("/admin/base-assistants/new", response_class=HTMLResponse)
 async def admin_base_assistant_new(
     request: Request,
-    admin: User = Depends(_current_admin_dependency),
+    admin: User = Depends(current_admin),
 ) -> HTMLResponse:
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "base_assistant_form.html",
         {
-            **_shell_page_context(request, admin),
+            **shell_context(request, admin),
             **_base_assistant_form_context(
-                providers=list_connection_providers(_context()),
+                providers=list_connection_providers(),
                 assistant=None,
             ),
         },
@@ -132,11 +88,10 @@ async def admin_base_assistant_new(
 async def admin_base_assistant_create(
     request: Request,
     _: None = Depends(verify_csrf_token),
-    admin: User = Depends(_current_admin_dependency),
+    admin: User = Depends(current_admin),
 ) -> Response:
     try:
         create_base_assistant(
-            _context(),
             actor=admin,
             **await _base_assistant_form_payload(request),
         )
@@ -149,19 +104,19 @@ async def admin_base_assistant_create(
 async def admin_base_assistant_edit(
     request: Request,
     assistant_id: str,
-    admin: User = Depends(_current_admin_dependency),
+    admin: User = Depends(current_admin),
 ) -> HTMLResponse:
     try:
-        assistant = get_base_assistant(_context(), base_assistant_id=assistant_id)
+        assistant = get_base_assistant(base_assistant_id=assistant_id)
     except AssistantUsecaseError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "base_assistant_form.html",
         {
-            **_shell_page_context(request, admin),
+            **shell_context(request, admin),
             **_base_assistant_form_context(
-                providers=list_connection_providers(_context()),
+                providers=list_connection_providers(),
                 assistant=assistant,
             ),
         },
@@ -173,11 +128,10 @@ async def admin_base_assistant_update(
     request: Request,
     assistant_id: str,
     _: None = Depends(verify_csrf_token),
-    admin: User = Depends(_current_admin_dependency),
+    admin: User = Depends(current_admin),
 ) -> Response:
     try:
         update_base_assistant(
-            _context(),
             actor=admin,
             base_assistant_id=assistant_id,
             **await _base_assistant_form_payload(request),
@@ -193,10 +147,10 @@ async def admin_base_assistant_update(
 async def admin_base_assistant_delete(
     assistant_id: str,
     _: None = Depends(verify_csrf_token),
-    admin: User = Depends(_current_admin_dependency),
+    admin: User = Depends(current_admin),
 ) -> Response:
     try:
-        delete_base_assistant(_context(), actor=admin, base_assistant_id=assistant_id)
+        delete_base_assistant(actor=admin, base_assistant_id=assistant_id)
     except AssistantUsecaseError as exc:
         raise HTTPException(404, str(exc)) from exc
     return RedirectResponse("/admin/base-assistants", 303)

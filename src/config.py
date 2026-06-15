@@ -1,14 +1,12 @@
-
 """アプリ起動時に使う設定値と固定接続先定義の読み込みを担当する。
 
-このファイルはファイルシステムや環境変数から設定を読む境界であり、FastAPI、
-SQLite、OpenAI SDK には依存しない。接続先定義は ConnectionProvider として
+このファイルはファイルシステムから設定を読む境界であり、FastAPI、SQLite、
+OpenAI SDK には依存しない。接続先定義は ConnectionProvider として
 アプリ内部へ渡し、アシスタント本体はDB管理へ委譲する。
 """
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,10 +35,10 @@ class AppConfig:
     templates_dir: Path = PROJECT_ROOT / "templates"
     static_dir: Path = PROJECT_ROOT / "static"
     session_secret: str = ""
+    password_pepper: str = ""
     session_cookie_name: str = "new_chat_session"
-    admin_login_name: str = "admin"
-    admin_password: str = "adminpass"
-    log_level: str = "DEBUG"
+    session_cookie_secure: bool = False
+    log_level: str = "INFO"
 
 
 def load_app_config(data_dir: Path = DATA_DIR) -> AppConfig:
@@ -52,26 +50,28 @@ def load_app_config(data_dir: Path = DATA_DIR) -> AppConfig:
     Returns:
         ファイル設定と既定値を合成したAppConfig。
 
-    app_config.json は必須設定ファイルとして扱い、session_secret が欠落して
-    いる場合は起動前に検知できるよう明示的に失敗する。
+    app_config.json は必須設定ファイルとして扱い、秘密値またはCookieの
+    Secure属性設定が欠落している場合は起動前に明示的に失敗する。
     """
     path = data_dir / "app_config.json"
     raw = _read_app_config_json(path)
     secret = _read_config_str(raw, "session_secret")
     if not secret:
         raise ValueError("app_config.json session_secret is required")
+    password_pepper = _read_config_str(raw, "password_pepper")
+    if not password_pepper:
+        raise ValueError("app_config.json password_pepper is required")
+    session_cookie_secure = _read_config_bool(raw, "session_cookie_secure")
     return AppConfig(
         data_dir=data_dir,
         log_dir=data_dir / "logs",
         db_path=data_dir / "data.sqlite",
         uploads_dir=data_dir / "uploads",
         session_secret=secret,
+        password_pepper=password_pepper,
         session_cookie_name=_read_config_str(raw, "session_cookie_name")
         or AppConfig.session_cookie_name,
-        admin_login_name=_read_config_str(raw, "admin_login_name")
-        or AppConfig.admin_login_name,
-        admin_password=_read_config_str(raw, "admin_password")
-        or AppConfig.admin_password,
+        session_cookie_secure=session_cookie_secure,
         log_level=_read_config_str(raw, "log_level") or AppConfig.log_level,
     )
 
@@ -108,6 +108,27 @@ def _read_config_str(config: dict[str, JsonValue], key: str) -> str:
     """
     value = config.get(key)
     return value.strip() if isinstance(value, str) and value.strip() else ""
+
+
+def _read_config_bool(config: dict[str, JsonValue], key: str) -> bool:
+    """JSON objectから必須の真偽値設定を取り出す。
+
+    Args:
+        config: app_config.jsonから読んだJSON object。
+        key: 読み出す設定名。
+
+    Returns:
+        JSONの真偽値。
+
+    Raises:
+        ValueError: 設定が欠落しているか、真偽値でない場合。
+
+    文字列や数値を暗黙変換せず、運用設定の誤りを起動時に検知する。
+    """
+    value = config.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"app_config.json {key} must be a boolean")
+    return value
 
 
 def default_connection_provider() -> ConnectionProvider:
@@ -206,12 +227,17 @@ def _read_api_mode(value: object) -> AssistantApiMode | None:
 
 
 def _read_api_key(item: dict[str, JsonValue]) -> str:
+    """Provider定義からAPI keyを読み込む。
+
+    Args:
+        item: connection_providers.json のProvider定義。
+
+    Returns:
+        api_keyが空でない文字列ならその値。それ以外は空文字。
+    """
     inline_key = item.get("api_key")
     if isinstance(inline_key, str) and inline_key:
         return inline_key
-    env_name = item.get("api_key_env")
-    if isinstance(env_name, str) and env_name:
-        return os.getenv(env_name, "")
     return ""
 
 

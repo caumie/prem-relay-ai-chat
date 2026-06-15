@@ -7,17 +7,14 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from ..usecase.auth import challenge
-from ..usecase.context import UsecaseContext
+from .context import presentation_templates
 from .util.csrf import ensure_csrf_token, rotate_csrf_token, verify_csrf_token
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-templates: Jinja2Templates | None = None
-usecase_context: UsecaseContext | None = None
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -36,7 +33,7 @@ async def index(request: Request) -> Response:
 async def login_form(request: Request) -> HTMLResponse:
     """ログインフォームを表示する"""
     logger.info("login request received")
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "login.html",
         dict(error=False, login_name="", csrf_token=ensure_csrf_token(request)),
@@ -52,11 +49,11 @@ async def login(
 ) -> Response:
     """ログインフォームの入力でセッションを開始する。"""
     logger.info("login submit received login_name=%s", login_name)
-    user = challenge(_usecase_context(), login_name=login_name, password=password)
+    user = challenge(login_name=login_name, password=password)
 
     if not user:
         logger.warning("auth.failed login_name=%s", login_name)
-        return _templates().TemplateResponse(
+        return presentation_templates().TemplateResponse(
             request,
             "login.html",
             dict(
@@ -82,17 +79,3 @@ async def logout(
     logger.info("logout user_id=%s", request.session.get("user_id"))
     request.session.clear()
     return RedirectResponse("/login", 303)
-
-
-def _templates() -> Jinja2Templates:
-    """認証routerで利用するテンプレート設定を返す。"""
-    if templates is None:
-        raise RuntimeError("Auth templates are not configured")
-    return templates
-
-
-def _usecase_context() -> UsecaseContext:
-    """認証routerで利用するusecase contextを返す。"""
-    if usecase_context is None:
-        raise RuntimeError("Auth usecase context is not configured")
-    return usecase_context

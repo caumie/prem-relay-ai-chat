@@ -2,10 +2,12 @@
 
 from ...infrastructure import BaseAssistantRepository
 from ...models import BaseAssistant
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 
 
-def list_selectable_base_assistants(context: UsecaseContext) -> list[BaseAssistant]:
+def list_selectable_base_assistants(
+    *, context: AssistantUsecaseContext | None = None
+) -> list[BaseAssistant]:
     """ユーザーが選択できる未削除 BaseAssistant 一覧を返す。
 
     Args:
@@ -16,5 +18,6 @@ def list_selectable_base_assistants(context: UsecaseContext) -> list[BaseAssista
 
     ユーザー向け assistant 作成・編集画面で選択肢を表示するため。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else assistant_usecase_context()
+    with ctx.database.connect() as conn:
         return BaseAssistantRepository(conn).list_active()

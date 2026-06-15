@@ -61,6 +61,20 @@ def test_attachment_storage_rejects_path_escape(tmp_path: Path) -> None:
         storage.resolve("../outside.txt")
 
 
+def test_attachment_storage_deletes_saved_file(tmp_path: Path) -> None:
+    # 観点: 保存相対パスを使ってuploads_dir配下の実ファイルを削除できること。
+    # 目的: usecaseが安全なパス解決やファイル削除の詳細を持たない境界を固定する。
+    storage = AttachmentStorage(tmp_path)
+    stored_path = "1/photo.jpg"
+    path = storage.resolve(stored_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"image")
+
+    storage.delete(stored_path)
+
+    assert not path.exists()
+
+
 def _pending_upload(upload: UploadFile) -> PendingUpload:
     """テスト用UploadFileをアプリ内入力境界へ変換する。"""
     return PendingUpload(

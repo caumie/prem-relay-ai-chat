@@ -3,12 +3,15 @@
 from ...infrastructure import UserAssistantRepository
 from ...models import User
 from ._support import can_manage_user_assistant
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 from .errors import AssistantUsecaseError
 
 
 def delete_user_assistant(
-    context: UsecaseContext, *, actor: User, user_assistant_id: str
+    *,
+    actor: User,
+    user_assistant_id: str,
+    context: AssistantUsecaseContext | None = None,
 ) -> bool:
     """編集可能な UserAssistant を論理削除する。
 
@@ -19,7 +22,8 @@ def delete_user_assistant(
     Returns:
         削除できたら True。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else assistant_usecase_context()
+    with ctx.database.connect() as conn:
         repo = UserAssistantRepository(conn)
         assistant = repo.get(user_assistant_id)
         if assistant is None:

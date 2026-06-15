@@ -6,8 +6,12 @@ from pathlib import Path
 from typing import NotRequired, TypedDict
 from uuid import uuid4
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from src.presentation.test_support import (
+    TestApplication,
+    started_test_application,
+    started_test_client,
+)
 
 from src.app import build_app
 from src.config import AppConfig
@@ -28,6 +32,7 @@ from src.infrastructure import (
     utcnow,
 )
 from src.service.response_service import StreamEvent
+from src.usecase.admin_user import AdminUserUsecaseContext, create_user
 
 
 class FakeResponder:
@@ -135,7 +140,7 @@ def test_chat_route_requires_login_for_chat(tmp_path: Path) -> None:
     # 目的: 認証必須のHTTP境界をweb_routes側の責務として固定する。
     app = build_app(_config(tmp_path))
 
-    response = TestClient(app, follow_redirects=False).get("/chat")
+    response = started_test_client(app, follow_redirects=False).get("/chat")
 
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
@@ -144,9 +149,9 @@ def test_chat_route_requires_login_for_chat(tmp_path: Path) -> None:
 def test_chat_route_creates_chat_with_htmx(tmp_path: Path) -> None:
     # 観点: ログイン後にHTMXで新規チャットを作成し、URL push headerが返ること。
     # 目的: routeがservice群を配線してHTML fragmentを返す責務を固定する。
-    app = build_app(_config(tmp_path))
-    created = _seed_standard_assistants(app, [{"name": "Default"}])
-    client = TestClient(app)
+    test_app = started_test_application(build_app(_config(tmp_path)))
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
 
     login_token = _csrf_token(client.get("/login").text)
     login = client.post(
@@ -184,12 +189,14 @@ def test_chat_route_uploads_attachment_when_assistant_allows_it(
 ) -> None:
     # 観点: allow_file_upload=true のassistantではmultipart添付を保存し、表示と取得ができること。
     # 目的: UI/HTTP入口から認可付きファイル取得までの最小フローを固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
     created = _seed_standard_assistants(
-        app,
+        test_app,
         [{"name": "Default", "allow_file_upload": True}],
     )
-    client = TestClient(app)
+    client = test_app.client
     _login(client)
     page = client.get("/chat/new")
 
@@ -218,12 +225,14 @@ def test_chat_route_rejects_attachment_when_assistant_disallows_it(
 ) -> None:
     # 観点: allow_file_upload=false のassistantでは添付付きPOSTを拒否すること。
     # 目的: モデル非対応時にファイルが保存・LLM送信されない入口制御を固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
     created = _seed_standard_assistants(
-        app,
+        test_app,
         [{"name": "Default", "allow_file_upload": False}],
     )
-    client = TestClient(app)
+    client = test_app.client
     _login(client)
     page = client.get("/chat/new")
 
@@ -244,9 +253,9 @@ def test_chat_route_rejects_attachment_when_assistant_disallows_it(
 def test_chat_route_rejects_post_with_invalid_csrf_token(tmp_path: Path) -> None:
     # 観点: 認証後の状態変更POSTは不正CSRFトークンで拒否されること。
     # 目的: protected routeがdependencyを明示していることを固定する。
-    app = build_app(_config(tmp_path))
-    created = _seed_standard_assistants(app, [{"name": "Default"}])
-    client = TestClient(app)
+    test_app = started_test_application(build_app(_config(tmp_path)))
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
 
     login_token = _csrf_token(client.get("/login").text)
     client.post(
@@ -277,9 +286,11 @@ def test_chat_route_delete_thread_from_sidebar_logically_hides_it(
 ) -> None:
     # 観点: サイドバーの削除POSTで対象threadが画面と詳細URLから見えなくなること。
     # 目的: 確認付き削除UIがHTTP境界では論理削除routeへ到達する契約を固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    created = _seed_standard_assistants(app, [{"name": "Default"}])
-    client = TestClient(app)
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
     _login(client)
     page = client.get("/chat/new")
     created = client.post(
@@ -315,9 +326,11 @@ def test_chat_route_edit_thread_title_with_htmx_updates_sidebar(
 ) -> None:
     # 観点: HTMXで中央寄せタイトルをアイコン編集し、blurで元表示へ戻せること。
     # 目的: タイトル編集のHTTP断片契約を固定し、軽いインライン編集UXを崩さないようにする。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    created = _seed_standard_assistants(app, [{"name": "Default"}])
-    client = TestClient(app)
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
     _login(client)
     page = client.get("/chat/new")
     created_chat = client.post(
@@ -369,9 +382,11 @@ def test_message_meta_shows_assistant_name_only_for_assistant_messages(
 ) -> None:
     # 観点: アシスタント名はassistant発言にだけ表示し、ユーザー発言には出さないこと。
     # 目的: ユーザーが選択して送信したassistant_idを人間の発言者名として誤表示しない。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    created = _seed_standard_assistants(app, [{"name": "Default"}])
-    with app.state.database.connect() as conn:
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    with test_app.usecase_runtime.database.connect() as conn:
         admin = AuthRepository(conn).get_by_login_name("admin")
         assert admin is not None
         thread = save_thread(conn, admin.id, "hello")
@@ -387,7 +402,7 @@ def test_message_meta_shows_assistant_name_only_for_assistant_messages(
             created["Default"],
         )
         conn.commit()
-    client = TestClient(app)
+    client = test_app.client
     _login(client)
 
     response = client.get(f"/chat/{thread.id}")
@@ -398,9 +413,11 @@ def test_message_meta_shows_assistant_name_only_for_assistant_messages(
 def test_chat_new_page_renders_idle_composer(tmp_path: Path) -> None:
     # 観点: 新規チャット画面は未処理状態の入力フォームを表示すること。
     # 目的: 応答生成中ではない通常画面のHTTP表示契約を固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    _seed_standard_assistants(app, [{"name": "Default"}])
-    client = TestClient(app)
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
     _login(client)
 
     response = client.get("/chat/new")
@@ -415,11 +432,13 @@ def test_processing_message_shows_cancel_button_and_locks_form(
 ) -> None:
     # 観点: 応答生成中のassistant messageがある画面では送信欄が処理中として扱われること。
     # 目的: 追加送信を止めつつ、ユーザーが途中中断できるHTML契約を固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    created = _seed_standard_assistants(app, [{"name": "Default"}])
-    client = TestClient(app)
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
     _login(client)
-    with app.state.database.connect() as conn:
+    with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
         assert user is not None
         thread = save_thread(conn, user.id, "slow answer")
@@ -442,11 +461,13 @@ def test_cancel_response_route_accepts_owned_processing_message_cancel(
 ) -> None:
     # 観点: 所有スレッドの生成中assistant messageをHTTP POSTで中断できること。
     # 目的: 生成状態の永続化ではなく、キャンセル操作のHTTP入口契約を固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    created = _seed_standard_assistants(app, [{"name": "Default"}])
-    client = TestClient(app)
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
     _login(client)
-    with app.state.database.connect() as conn:
+    with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
         assert user is not None
         thread = save_thread(conn, user.id, "cancel me")
@@ -469,8 +490,10 @@ def test_sidebar_shows_logged_in_user_and_icon_only_logout(
 ) -> None:
     # 観点: サイドバーにログイン済みユーザー名が表示されること。
     # 目的: HTTP表示でセッション中のアカウント状態を確認できる契約を固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    client = TestClient(app)
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    client = test_app.client
     _login(client)
 
     response = client.get("/chat/new")
@@ -486,10 +509,12 @@ def _config(tmp_path: Path) -> AppConfig:
         data_dir=tmp_path,
         uploads_dir=tmp_path / "uploads",
         session_secret="test-secret",
+        password_pepper="test-pepper",
     )
 
 
 def _login(client: TestClient) -> None:
+    _ensure_initial_admin(client)
     login_token = _csrf_token(client.get("/login").text)
     response = client.post(
         "/login",
@@ -503,11 +528,28 @@ def _login(client: TestClient) -> None:
     assert response.status_code == 303
 
 
+def _ensure_initial_admin(client: TestClient) -> None:
+    """初回セットアップ画面から既定管理者を用意する。"""
+    page = client.get("/setup/admin", follow_redirects=False)
+    if page.status_code != 200:
+        return
+    response = client.post(
+        "/setup/admin",
+        data={
+            "login_name": "admin",
+            "password": "adminpass",
+            "_csrf_token": _csrf_token(page.text),
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
 def _seed_standard_assistants(
-    app: FastAPI,
+    test_app: TestApplication,
     assistants: list[AssistantSeed],
 ) -> dict[str, str]:
-    config = app.state.config
+    config = test_app.usecase_runtime.config
     (config.data_dir / "connection_providers.json").write_text(
         json.dumps(
             {
@@ -525,10 +567,21 @@ def _seed_standard_assistants(
         ),
         encoding="utf-8",
     )
-    with app.state.database.connect() as conn:
+    with test_app.usecase_runtime.database.connect() as conn:
         auth = AuthRepository(conn)
         admin = auth.get_by_login_name("admin")
-        assert admin is not None
+    if admin is None:
+        admin = create_user(
+            login_name="admin",
+            password="adminpass",
+            is_admin=True,
+            context=AdminUserUsecaseContext(
+                database=test_app.usecase_runtime.database,
+                password_pepper="test-pepper",
+                attachment_storage=test_app.usecase_runtime.attachment_storage,
+            ),
+        )
+    with test_app.usecase_runtime.database.connect() as conn:
         created_by_name: dict[str, str] = {}
         for item in assistants:
             max_history = item.get("max_history_messages", 40)

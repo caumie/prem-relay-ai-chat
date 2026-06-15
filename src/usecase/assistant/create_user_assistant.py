@@ -3,11 +3,10 @@
 from ...infrastructure import BaseAssistantRepository, UserAssistantRepository
 from ...models import AssistantVisibility, User, UserAssistant, UserInputError
 from ._support import new_user_assistant, validate_user_fields
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 
 
 def create_user_assistant(
-    context: UsecaseContext,
     *,
     actor: User,
     base_assistant_id: str | None,
@@ -15,6 +14,7 @@ def create_user_assistant(
     description: str,
     user_prompts: list[str],
     visibility: AssistantVisibility,
+    context: AssistantUsecaseContext | None = None,
 ) -> UserAssistant:
     """現在ユーザー所有の UserAssistant を作成する。
 
@@ -29,12 +29,13 @@ def create_user_assistant(
     Returns:
         作成した UserAssistant。
     """
+    ctx = context if context is not None else assistant_usecase_context()
     validate_user_fields(
         base_assistant_id=base_assistant_id,
         name=name,
         visibility=visibility,
     )
-    with context.database.connect() as conn:
+    with ctx.database.connect() as conn:
         base_repo = BaseAssistantRepository(conn)
         if base_assistant_id is None or base_repo.get(base_assistant_id) is None:
             raise UserInputError("base assistant is required")

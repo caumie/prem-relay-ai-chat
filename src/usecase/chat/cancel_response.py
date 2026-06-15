@@ -4,17 +4,17 @@ from dataclasses import replace
 
 from ...infrastructure import MessageRepository, utcnow
 from ...models import MessageStatus
-from ..context import UsecaseContext
+from . import ChatUsecaseContext, chat_usecase_context
 from .errors import ChatUsecaseError
 from .get_thread_detail import get_thread_detail
 
 
 async def cancel_response(
-    context: UsecaseContext,
     *,
     user_id: int,
     thread_id: str,
     message_id: int,
+    context: ChatUsecaseContext | None = None,
 ) -> None:
     """生成中assistant messageの応答生成を中断する。
 
@@ -32,10 +32,11 @@ async def cancel_response(
     response serviceがジョブを持たない場合のfailed収束も含め、
     routeへMessageRepository更新を漏らさないため。
     """
-    detail = get_thread_detail(context, thread_id=thread_id, user_id=user_id)
+    ctx = context if context is not None else chat_usecase_context()
+    detail = get_thread_detail(thread_id=thread_id, user_id=user_id, context=ctx)
     if detail is None:
         raise ChatUsecaseError("thread not found")
-    with context.database.connect() as conn:
+    with ctx.database.connect() as conn:
         repo = MessageRepository(conn)
         try:
             message = repo.get(message_id)
@@ -46,7 +47,7 @@ async def cancel_response(
             or message.status is not MessageStatus.PROCESSING
         ):
             raise ChatUsecaseError("message not processing")
-        cancelled = await context.response_service.cancel_response(message_id)
+        cancelled = await ctx.response_service.cancel_response(message_id)
         if not cancelled:
             repo.update(
                 replace(

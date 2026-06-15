@@ -3,11 +3,14 @@
 from ...infrastructure import UserAssistantRepository
 from ...models import User
 from ..assistant.errors import AssistantUsecaseError
-from ..context import UsecaseContext
+from . import AdminUserAssistantUsecaseContext, admin_user_assistant_usecase_context
 
 
 def delete_user_assistant(
-    context: UsecaseContext, *, actor: User, user_assistant_id: str
+    *,
+    actor: User,
+    user_assistant_id: str,
+    context: AdminUserAssistantUsecaseContext | None = None,
 ) -> bool:
     """admin が対象 UserAssistant を論理削除する。
 
@@ -20,8 +23,9 @@ def delete_user_assistant(
 
     admin 管理画面から任意の user assistant を削除できるようにするため。
     """
+    ctx = context if context is not None else admin_user_assistant_usecase_context()
     _require_admin(actor)
-    with context.database.connect() as conn:
+    with ctx.database.connect() as conn:
         repo = UserAssistantRepository(conn)
         if repo.get(user_assistant_id) is None:
             raise AssistantUsecaseError("user assistant not found")

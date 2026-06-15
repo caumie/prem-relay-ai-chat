@@ -1,13 +1,16 @@
 """スレッド削除ユースケースを担当する。"""
 
 from ...infrastructure import ThreadRepository
-from ..context import UsecaseContext
+from . import ChatUsecaseContext, chat_usecase_context
 from .errors import ChatUsecaseError
 
 
-def delete_thread(context: UsecaseContext, *, thread_id: str, user_id: int) -> bool:
+def delete_thread(
+    *, thread_id: str, user_id: int, context: ChatUsecaseContext | None = None
+) -> bool:
     """指定ユーザーが所有するスレッドを論理削除する。"""
-    with context.database.connect() as conn:
+    ctx = context if context is not None else chat_usecase_context()
+    with ctx.database.connect() as conn:
         deleted = ThreadRepository(conn).logical_delete(
             thread_id=thread_id,
             user_id=user_id,

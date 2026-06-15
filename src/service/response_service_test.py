@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-from src.auth_password import hash_password
+from src.service.password import hash_password
 from src.models import (
     LlmMessage,
     Message,
@@ -448,8 +448,9 @@ def save_user(
     login_name: str,
     password: str,
 ) -> User:
-    return AuthRepository(conn).save(
-        User(id=0, login_name=login_name),
+    return AuthRepository(conn).create(
+        login_name=login_name,
+        is_admin=False,
         password_hash=hash_password(password, password_pepper),
     )
 

@@ -3,15 +3,15 @@
 from ...infrastructure import UserAssistantRepository
 from ...models import User, UserAssistant
 from ._support import can_manage_user_assistant
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 from .errors import AssistantUsecaseError
 
 
 def get_manageable_user_assistant(
-    context: UsecaseContext,
     *,
     actor: User,
     user_assistant_id: str,
+    context: AssistantUsecaseContext | None = None,
 ) -> UserAssistant:
     """現在ユーザーが編集できる UserAssistant を取得する。
 
@@ -22,7 +22,8 @@ def get_manageable_user_assistant(
     Returns:
         編集可能な UserAssistant。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else assistant_usecase_context()
+    with ctx.database.connect() as conn:
         assistant = UserAssistantRepository(conn).get(user_assistant_id)
     if assistant is None:
         raise AssistantUsecaseError("user assistant not found")

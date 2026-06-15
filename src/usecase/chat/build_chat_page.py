@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 from ...infrastructure import AttachmentRepository, ChatThreadQuery
 from ...models import AssistantOption, Attachment, Message, MessageStatus, Thread
-from ..assistant import list_available_assistants
-from ..context import UsecaseContext
+from ..assistant import AssistantUsecaseContext, list_available_assistants
+from . import ChatUsecaseContext, chat_usecase_context
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,10 @@ class ChatPage:
 
 
 def build_chat_page(
-    context: UsecaseContext, *, user_id: int, thread_id: str | None = None
+    *,
+    user_id: int,
+    thread_id: str | None = None,
+    context: ChatUsecaseContext | None = None,
 ) -> ChatPage | None:
     """チャット画面の表示状態をDBから構築する。
 
@@ -39,8 +42,12 @@ def build_chat_page(
     routeがRepository束や画面用Queryの組み合わせを知らずに済むよう、
     サイドバー、メッセージ、添付、assistant選択状態をここへ集約する。
     """
-    assistants = list_available_assistants(context, user_id=user_id)
-    with context.database.connect() as conn:
+    ctx = context if context is not None else chat_usecase_context()
+    assistants = list_available_assistants(
+        user_id=user_id,
+        context=_assistant_context(ctx),
+    )
+    with ctx.database.connect() as conn:
         query = ChatThreadQuery(conn)
         threads = query.list_sidebar_threads(user_id)
         detail = (
@@ -103,3 +110,11 @@ def _selected_assistant_id(
         if message.assistant_id in available_ids:
             return message.assistant_id or ""
     return selected
+
+
+def _assistant_context(context: ChatUsecaseContext) -> AssistantUsecaseContext:
+    """chat context から assistant 一覧取得に必要な依存だけを取り出す。"""
+    return AssistantUsecaseContext(
+        database=context.database,
+        load_connection_providers=context.load_connection_providers,
+    )

@@ -7,8 +7,11 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from src.presentation.test_support import (
+    TestApplication,
+    started_test_application,
+)
 from httpx import Response as HttpResponse
 
 from src.app import build_app
@@ -38,12 +41,14 @@ class FakeResponder:
 def test_sse_stream_route_returns_event_stream_response(tmp_path: Path) -> None:
     # 観点: SSE routeが認証済みユーザーのprocessing messageへHTTP streamを返すこと。
     # 目的: 生成内容や永続化ではなく、presentation層のHTTP境界だけを固定する。
-    app = build_app(_config(tmp_path), responder=FakeResponder())
-    client = TestClient(app)
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    client = test_app.client
     _login(client)
-    _post_new_chat(client, app)
+    _post_new_chat(client, test_app)
 
-    thread_id, assistant_id = _latest_assistant(app)
+    thread_id, assistant_id = _latest_assistant(test_app)
     response = client.get(f"/chat/{thread_id}/stream/{assistant_id}")
 
     assert response.status_code == 200
@@ -86,10 +91,12 @@ def _config(tmp_path: Path) -> AppConfig:
         data_dir=tmp_path,
         uploads_dir=tmp_path / "uploads",
         session_secret="test-secret",
+        password_pepper="test-pepper",
     )
 
 
 def _login(client: TestClient) -> HttpResponse:
+    _ensure_initial_admin(client)
     return client.post(
         "/login",
         data={
@@ -101,8 +108,25 @@ def _login(client: TestClient) -> HttpResponse:
     )
 
 
-def _post_new_chat(client: TestClient, app: FastAPI) -> HttpResponse:
-    assistant_id = _ensure_default_assistant(app)
+def _ensure_initial_admin(client: TestClient) -> None:
+    """初回セットアップ画面から既定管理者を用意する。"""
+    page = client.get("/setup/admin", follow_redirects=False)
+    if page.status_code != 200:
+        return
+    response = client.post(
+        "/setup/admin",
+        data={
+            "login_name": "admin",
+            "password": "adminpass",
+            "_csrf_token": _csrf_token(page.text),
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def _post_new_chat(client: TestClient, test_app: TestApplication) -> HttpResponse:
+    assistant_id = _ensure_default_assistant(test_app)
     page = client.get("/chat/new")
     return client.post(
         "/chat/new",
@@ -114,8 +138,8 @@ def _post_new_chat(client: TestClient, app: FastAPI) -> HttpResponse:
     )
 
 
-def _latest_assistant(app: FastAPI) -> tuple[str, int]:
-    database = app.state.database
+def _latest_assistant(test_app: TestApplication) -> tuple[str, int]:
+    database = test_app.usecase_runtime.database
     with database.connect() as conn:
         auth_repo = AuthRepository(conn)
         thread_repo = ThreadRepository(conn)
@@ -131,8 +155,8 @@ def _latest_assistant(app: FastAPI) -> tuple[str, int]:
     return thread.id, assistant.id
 
 
-def _ensure_default_assistant(app: FastAPI) -> str:
-    config = app.state.config
+def _ensure_default_assistant(test_app: TestApplication) -> str:
+    config = test_app.usecase_runtime.config
     (config.data_dir / "connection_providers.json").write_text(
         json.dumps(
             {
@@ -150,7 +174,7 @@ def _ensure_default_assistant(app: FastAPI) -> str:
         ),
         encoding="utf-8",
     )
-    with app.state.database.connect() as conn:
+    with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
         assert user is not None
         assistants = BaseAssistantRepository(conn)

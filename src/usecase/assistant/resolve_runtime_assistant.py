@@ -3,11 +3,14 @@
 from ...infrastructure import BaseAssistantRepository, UserAssistantRepository
 from ...models import ResolvedAssistant, UserInputError
 from ._support import resolve_base
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 
 
 def resolve_runtime_assistant(
-    context: UsecaseContext, *, user_id: int, assistant_id: str
+    *,
+    user_id: int,
+    assistant_id: str,
+    context: AssistantUsecaseContext | None = None,
 ) -> ResolvedAssistant:
     """利用者が選んだ assistant を接続先解決済みの実行形へ変換する。
 
@@ -18,13 +21,14 @@ def resolve_runtime_assistant(
     Returns:
         Provider の接続設定を合成した実行用 Assistant。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else assistant_usecase_context()
+    with ctx.database.connect() as conn:
         base_repo = BaseAssistantRepository(conn)
         user_repo = UserAssistantRepository(conn)
         base = base_repo.get(assistant_id)
         if base is not None:
             return resolve_base(
-                providers=context.load_connection_providers(),
+                providers=ctx.load_connection_providers(),
                 base=base,
             )
         user_assistant = user_repo.get(assistant_id)
@@ -39,7 +43,7 @@ def resolve_runtime_assistant(
         if base is None:
             raise UserInputError("base assistant is not assigned")
         return resolve_base(
-            providers=context.load_connection_providers(),
+            providers=ctx.load_connection_providers(),
             base=base,
             user_assistant=user_assistant,
         )

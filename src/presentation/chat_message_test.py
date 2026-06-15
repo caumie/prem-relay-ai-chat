@@ -6,8 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from src.presentation.test_support import (
+    TestApplication,
+    started_test_application,
+)
 
 from src.app import build_app
 from src.config import AppConfig
@@ -29,16 +32,17 @@ from src.models import (
     MessageStatus,
     Thread,
 )
+from src.usecase.admin_user import AdminUserUsecaseContext, create_user
 
 
 def test_chat_thread_renders_saved_reasoning_kind(tmp_path: Path) -> None:
     # 観点: 保存済みassistant messageのreasoning kindが初期HTMLへ出ること。
     # 目的: SSE完了後に再表示してもthinking領域をDBから復元できる契約を固定する。
-    app = build_app(_config(tmp_path))
-    assistant_id = _ensure_default_assistant(app)
-    client = TestClient(app)
+    test_app = started_test_application(build_app(_config(tmp_path)))
+    assistant_id = _ensure_default_assistant(test_app)
+    client = test_app.client
     _login(client)
-    with app.state.database.connect() as conn:
+    with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
         assert user is not None
         thread = save_thread(conn, user.id, "reasoning thread")
@@ -69,11 +73,11 @@ def test_chat_thread_renders_saved_reasoning_kind(tmp_path: Path) -> None:
 def test_chat_thread_opens_reasoning_for_processing_message(tmp_path: Path) -> None:
     # 観点: 生成中assistant messageのreasoningは初期HTMLで展開されること。
     # 目的: リロード時もstream中はreasoningを普通のメッセージのように見せる契約を固定する。
-    app = build_app(_config(tmp_path))
-    assistant_id = _ensure_default_assistant(app)
-    client = TestClient(app)
+    test_app = started_test_application(build_app(_config(tmp_path)))
+    assistant_id = _ensure_default_assistant(test_app)
+    client = test_app.client
     _login(client)
-    with app.state.database.connect() as conn:
+    with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
         assert user is not None
         thread = save_thread(conn, user.id, "processing reasoning")
@@ -101,10 +105,10 @@ def test_chat_thread_hides_empty_user_bubble_for_attachment_only_message(
 ) -> None:
     # 観点: 添付だけのユーザー発言では空本文バブルを描画しないこと。
     # 目的: 画像だけ投稿したときに不要な空メッセージ領域を見せない表示契約を固定する。
-    app = build_app(_config(tmp_path))
-    client = TestClient(app)
+    test_app = started_test_application(build_app(_config(tmp_path)))
+    client = test_app.client
     _login(client)
-    with app.state.database.connect() as conn:
+    with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
         assert user is not None
         thread = save_thread(conn, user.id, "attachment only")
@@ -266,10 +270,12 @@ def _config(tmp_path: Path) -> AppConfig:
         data_dir=tmp_path,
         uploads_dir=tmp_path / "uploads",
         session_secret="test-secret",
+        password_pepper="test-pepper",
     )
 
 
 def _login(client: TestClient) -> None:
+    _ensure_initial_admin(client)
     response = client.post(
         "/login",
         data={
@@ -282,16 +288,44 @@ def _login(client: TestClient) -> None:
     assert response.status_code == 303
 
 
+def _ensure_initial_admin(client: TestClient) -> None:
+    """初回セットアップ画面から既定管理者を用意する。"""
+    page = client.get("/setup/admin", follow_redirects=False)
+    if page.status_code != 200:
+        return
+    response = client.post(
+        "/setup/admin",
+        data={
+            "login_name": "admin",
+            "password": "adminpass",
+            "_csrf_token": _csrf_token(page.text),
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
 def _csrf_token(html: str) -> str:
     match = re.search(r'name="_csrf_token" value="([^"]+)"', html)
     assert match is not None
     return match.group(1)
 
 
-def _ensure_default_assistant(app: FastAPI) -> str:
-    with app.state.database.connect() as conn:
+def _ensure_default_assistant(test_app: TestApplication) -> str:
+    with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
-        assert user is not None
+    if user is None:
+        user = create_user(
+            login_name="admin",
+            password="adminpass",
+            is_admin=True,
+            context=AdminUserUsecaseContext(
+                database=test_app.usecase_runtime.database,
+                password_pepper="test-pepper",
+                attachment_storage=test_app.usecase_runtime.attachment_storage,
+            ),
+        )
+    with test_app.usecase_runtime.database.connect() as conn:
         assistants = BaseAssistantRepository(conn)
         existing = assistants.list_active()
         if existing:

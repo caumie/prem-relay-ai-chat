@@ -24,14 +24,13 @@ def row_from_model(
     updated_at: str,
 ) -> dict[str, object]:
     row: dict[str, object] = dict(
+        id=user.id,
         login_name=user.login_name,
         password_hash=password_hash,
         is_admin=1 if user.is_admin else 0,
         suspended_at=user.suspended_at.isoformat() if user.suspended_at else None,
         updated_at=updated_at,
     )
-    if user.id > 0:
-        row["id"] = user.id
     if created_at is not None:
         row["created_at"] = created_at
     return row
@@ -43,64 +42,56 @@ class AuthRepository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
 
-    def save(self, user: User, *, password_hash: str) -> User:
+    def create(
+        self,
+        *,
+        login_name: str,
+        is_admin: bool,
+        password_hash: str,
+    ) -> User:
+        """DB採番でユーザーを作成し、保存済みモデルを返す。
+
+        Args:
+            login_name: 保存するログイン名。
+            is_admin: 管理者権限を付与する場合はTrue。
+            password_hash: 保存するハッシュ化済みパスワード。
+
+        Returns:
+            DBが採番したIDを持つ保存済みユーザー。
+
+        作成前の仮IDをUserで表現せず、採番の責務をDBに限定するため。
+        """
         now = utcnow().isoformat()
-        row = row_from_model(
-            user,
-            password_hash=password_hash,
-            created_at=now,
-            updated_at=now,
+        cursor = self.conn.execute(
+            """
+            insert into active_users(
+                login_name,
+                password_hash,
+                is_admin,
+                suspended_at,
+                created_at,
+                updated_at
+            )
+            values(
+                :login_name,
+                :password_hash,
+                :is_admin,
+                null,
+                :created_at,
+                :updated_at
+            )
+            """,
+            dict(
+                login_name=login_name,
+                password_hash=password_hash,
+                is_admin=1 if is_admin else 0,
+                created_at=now,
+                updated_at=now,
+            ),
         )
-        if user.id > 0:
-            self.conn.execute(
-                """
-                insert into active_users(
-                    id,
-                    login_name,
-                    password_hash,
-                    is_admin,
-                    suspended_at,
-                    created_at,
-                    updated_at
-                )
-                values(
-                    :id,
-                    :login_name,
-                    :password_hash,
-                    :is_admin,
-                    :suspended_at,
-                    :created_at,
-                    :updated_at
-                )
-                """,
-                row,
-            )
-            user_id = user.id
-        else:
-            cursor = self.conn.execute(
-                """
-                insert into active_users(
-                    login_name,
-                    password_hash,
-                    is_admin,
-                    suspended_at,
-                    created_at,
-                    updated_at
-                )
-                values(
-                    :login_name,
-                    :password_hash,
-                    :is_admin,
-                    :suspended_at,
-                    :created_at,
-                    :updated_at
-                )
-                """,
-                row,
-            )
-            if cursor.lastrowid is None:
-                raise RuntimeError("Failed to create user")
-            user_id = int(cursor.lastrowid)
+        if cursor.lastrowid is None:
+            raise RuntimeError("Failed to create user")
+        user_id = int(cursor.lastrowid)
         loaded = self.get_user(user_id)
         if loaded is None:
             raise RuntimeError("Failed to create user")
@@ -170,6 +161,28 @@ class AuthRepository:
                 id asc
             """).fetchall()
         return [model_from_row(row) for row in rows]
+
+    def has_admin_user(self) -> bool:
+        """有効ユーザーに管理者が存在するか返す。
+
+        Returns:
+            管理者ユーザーが1人以上存在する場合はTrue。
+
+        初回セットアップの可否判定がユーザー一覧の件数計算を持たず、
+        repositoryへ永続化表現の問い合わせを委譲できるようにするため。
+        """
+        row = self.conn.execute(
+            """
+            select
+                1
+            from
+                active_users
+            where
+                is_admin = 1
+            limit 1
+            """
+        ).fetchone()
+        return row is not None
 
     def update(self, user: User, *, password_hash: str | None = None) -> User:
         existing = self.conn.execute(

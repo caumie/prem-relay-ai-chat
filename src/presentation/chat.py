@@ -1,16 +1,12 @@
 """chat 画面と SSE の HTML router を担当する。"""
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
-from fastapi.templating import Jinja2Templates
 
-from ..infrastructure import AttachmentStorage
 from ..models import Message, PendingUpload, User, UserInputError
-from ..service.response_service import ResponseService
-from ..usecase.context import UsecaseContext
 from ..usecase.chat import (
     ChatPage,
     ChatUsecaseError,
@@ -19,72 +15,18 @@ from ..usecase.chat import (
     cancel_response as cancel_response_usecase,
     create_chat as create_chat_usecase,
     delete_thread as delete_thread_usecase,
-    get_attachment as get_attachment_usecase,
+    get_attachment_download,
     prepare_response_stream,
     rename_thread as rename_thread_usecase,
+    stream_response_events,
 )
+from .context import current_user, presentation_templates
 from .util.csrf import ensure_csrf_token, verify_csrf_token
 
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-templates: Jinja2Templates | None = None
-_current_user: Callable[[Request], Awaitable[User]] | None = None
-_response_service: ResponseService | None = None
-_attachment_storage: AttachmentStorage | None = None
-_usecase_context: UsecaseContext | None = None
-
-
-def configure_chat_routes(
-    *,
-    usecase_context: UsecaseContext,
-    current_user: Callable[[Request], Awaitable[User]],
-    response_service: ResponseService,
-    attachment_storage: AttachmentStorage,
-) -> None:
-    """chat router で使う依存関係を設定する。"""
-    global _current_user, _usecase_context
-    global _response_service, _attachment_storage
-    _usecase_context = usecase_context
-    _current_user = current_user
-    _response_service = response_service
-    _attachment_storage = attachment_storage
-
-
-async def _current_user_dependency(request: Request) -> User:
-    """chat router 用の現在ユーザー依存関係を返す。"""
-    if _current_user is None:
-        raise RuntimeError("Chat current_user dependency is not configured")
-    return await _current_user(request)
-
-
-def _templates() -> Jinja2Templates:
-    """chat router で利用するテンプレート設定を返す。"""
-    if templates is None:
-        raise RuntimeError("Chat templates are not configured")
-    return templates
-
-
-def _response_runtime() -> ResponseService:
-    """chat router で利用する response service を返す。"""
-    if _response_service is None:
-        raise RuntimeError("Chat response service is not configured")
-    return _response_service
-
-
-def _storage() -> AttachmentStorage:
-    """chat router で利用する attachment storage を返す。"""
-    if _attachment_storage is None:
-        raise RuntimeError("Chat attachment storage is not configured")
-    return _attachment_storage
-
-
-def _context() -> UsecaseContext:
-    """chat router で利用するusecase contextを返す。"""
-    if _usecase_context is None:
-        raise RuntimeError("Chat usecase context is not configured")
-    return _usecase_context
 
 
 def _chat_context(request: Request, user: User, page: ChatPage) -> dict[str, object]:
@@ -112,16 +54,16 @@ def _chat_context(request: Request, user: User, page: ChatPage) -> dict[str, obj
 @router.get("/chat", response_class=HTMLResponse)
 async def chat_home(
     request: Request,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> Response:
     """最新スレッドか新規チャット画面へ遷移する。"""
-    page = build_chat_page(_context(), user_id=user.id)
+    page = build_chat_page(user_id=user.id)
     if page is None:
         raise HTTPException(404)
     logger.info("route.chat_home user_id=%s thread_count=%s", user.id, len(page.threads))
     if page.threads:
         return RedirectResponse(f"/chat/{page.threads[0].id}", 303)
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "chat.html",
         _chat_context(request, user, page),
@@ -131,14 +73,14 @@ async def chat_home(
 @router.get("/chat/new", response_class=HTMLResponse)
 async def chat_new(
     request: Request,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> HTMLResponse:
     """新規チャット画面を表示する。"""
     logger.info("route.chat_new user_id=%s", user.id)
-    page = build_chat_page(_context(), user_id=user.id)
+    page = build_chat_page(user_id=user.id)
     if page is None:
         raise HTTPException(404)
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "chat.html",
         _chat_context(request, user, page),
@@ -149,7 +91,7 @@ async def chat_new(
 async def create_chat(
     request: Request,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
     content: str = Form(""),
     assistant_id: str = Form(""),
     files: list[UploadFile] = File(default=[]),
@@ -165,7 +107,6 @@ async def create_chat(
     )
     try:
         result = await create_chat_usecase(
-            _context(),
             user_id=user.id,
             content=content,
             assistant_id=assistant_id,
@@ -178,7 +119,7 @@ async def create_chat(
         result.thread.id,
         result.assistant_message.id,
     )
-    page = build_chat_page(_context(), user_id=user.id, thread_id=result.thread.id)
+    page = build_chat_page(user_id=user.id, thread_id=result.thread.id)
     if page is None:
         raise HTTPException(404)
     headers = (
@@ -186,7 +127,7 @@ async def create_chat(
         if request.headers.get("HX-Request")
         else None
     )
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "chat_created.html",
         _chat_context(request, user, page),
@@ -198,14 +139,14 @@ async def create_chat(
 async def chat_thread(
     request: Request,
     thread_id: str,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> HTMLResponse:
     """既存スレッド画面を表示する。"""
-    page = build_chat_page(_context(), user_id=user.id, thread_id=thread_id)
+    page = build_chat_page(user_id=user.id, thread_id=thread_id)
     if page is None:
         raise HTTPException(404)
     logger.info("route.chat_thread user_id=%s thread_id=%s", user.id, thread_id)
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "chat.html",
         _chat_context(request, user, page),
@@ -216,13 +157,13 @@ async def chat_thread(
 async def edit_chat_thread_title(
     request: Request,
     thread_id: str,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> HTMLResponse:
     """スレッドタイトル編集用の HTMX 断片を返す。"""
-    page = build_chat_page(_context(), user_id=user.id, thread_id=thread_id)
+    page = build_chat_page(user_id=user.id, thread_id=thread_id)
     if page is None:
         raise HTTPException(404)
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "thread_title_edit.html",
         _chat_context(request, user, page),
@@ -234,23 +175,22 @@ async def update_chat_thread_title(
     request: Request,
     thread_id: str,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
     title: str = Form(""),
 ) -> HTMLResponse:
     """スレッドタイトル更新を処理する。"""
     try:
         thread = rename_thread_usecase(
-            _context(),
             thread_id=thread_id,
             user_id=user.id,
             title=title,
         )
     except ChatUsecaseError as exc:
         raise HTTPException(404) from exc
-    page = build_chat_page(_context(), user_id=user.id, thread_id=thread.id)
+    page = build_chat_page(user_id=user.id, thread_id=thread.id)
     if page is None:
         raise HTTPException(404)
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "thread_title_updated.html",
         _chat_context(request, user, page),
@@ -261,11 +201,11 @@ async def update_chat_thread_title(
 async def delete_chat_thread(
     thread_id: str,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> Response:
     """対象スレッドを論理削除する。"""
     try:
-        delete_thread_usecase(_context(), thread_id=thread_id, user_id=user.id)
+        delete_thread_usecase(thread_id=thread_id, user_id=user.id)
     except ChatUsecaseError as exc:
         raise HTTPException(404) from exc
     logger.info("chat.deleted thread_id=%s user_id=%s", thread_id, user.id)
@@ -277,7 +217,7 @@ async def add_chat_message(
     request: Request,
     thread_id: str,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
     content: str = Form(""),
     assistant_id: str = Form(""),
     files: list[UploadFile] = File(default=[]),
@@ -294,7 +234,6 @@ async def add_chat_message(
     )
     try:
         result = await add_message_usecase(
-            _context(),
             user_id=user.id,
             thread_id=thread_id,
             content=content,
@@ -310,11 +249,11 @@ async def add_chat_message(
         thread_id,
         result.assistant_message.id,
     )
-    page = build_chat_page(_context(), user_id=user.id, thread_id=thread_id)
+    page = build_chat_page(user_id=user.id, thread_id=thread_id)
     if page is None:
         raise HTTPException(404)
     messages = page.messages[-2:]
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "message_items.html",
         {
@@ -333,12 +272,11 @@ async def cancel_chat_response(
     thread_id: str,
     message_id: int,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> Response:
     """生成中 assistant message の応答生成を中断する。"""
     try:
         await cancel_response_usecase(
-            _context(),
             user_id=user.id,
             thread_id=thread_id,
             message_id=message_id,
@@ -357,21 +295,19 @@ async def cancel_chat_response(
 @router.get("/attachments/{attachment_id}", name="attachment_download")
 async def attachment_download(
     attachment_id: str,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> FileResponse:
     """所有者検証付きで添付ファイルを返す。"""
-    attachment = get_attachment_usecase(
-        _context(),
+    download = get_attachment_download(
         attachment_id=attachment_id,
         user_id=user.id,
     )
-    if attachment is None:
+    if download is None:
         raise HTTPException(404)
-    path = _storage().resolve(attachment.stored_path)
     return FileResponse(
-        path,
-        media_type=attachment.content_type,
-        filename=attachment.original_filename,
+        download.path,
+        media_type=download.media_type,
+        filename=download.filename,
     )
 
 
@@ -379,12 +315,11 @@ async def attachment_download(
 async def stream_response(
     thread_id: str,
     response_id: int,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> StreamingResponse:
     """assistant 応答の SSE stream を返す。"""
     try:
         response_message = prepare_response_stream(
-            _context(),
             user_id=user.id,
             thread_id=thread_id,
             response_id=response_id,
@@ -400,7 +335,7 @@ async def stream_response(
     )
 
     async def events() -> AsyncIterator[str]:
-        async for event in _response_runtime().stream_events(response_message):
+        async for event in stream_response_events(response_message=response_message):
             yield event.to_sse()
 
     return StreamingResponse(events(), media_type="text/event-stream")

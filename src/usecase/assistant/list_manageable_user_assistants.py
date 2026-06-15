@@ -2,11 +2,11 @@
 
 from ...infrastructure import UserAssistantRepository
 from ...models import User, UserAssistant
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 
 
 def list_manageable_user_assistants(
-    context: UsecaseContext, actor: User
+    actor: User, context: AssistantUsecaseContext | None = None
 ) -> list[UserAssistant]:
     """現在ユーザーが管理できる UserAssistant 一覧を返す。
 
@@ -16,7 +16,8 @@ def list_manageable_user_assistants(
     Returns:
         管理者なら全件、通常ユーザーなら所有分だけの UserAssistant 一覧。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else assistant_usecase_context()
+    with ctx.database.connect() as conn:
         repo = UserAssistantRepository(conn)
         if actor.is_admin:
             return repo.list_active()

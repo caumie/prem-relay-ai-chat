@@ -2,10 +2,12 @@
 
 from ...infrastructure import BaseAssistantRepository
 from ...models import BaseAssistant
-from ..context import UsecaseContext
+from . import AdminBaseAssistantUsecaseContext, admin_base_assistant_usecase_context
 
 
-def list_base_assistants(context: UsecaseContext) -> list[BaseAssistant]:
+def list_base_assistants(
+    *, context: AdminBaseAssistantUsecaseContext | None = None
+) -> list[BaseAssistant]:
     """管理画面で編集できる未削除 BaseAssistant 一覧を返す。
 
     Args:
@@ -16,5 +18,6 @@ def list_base_assistants(context: UsecaseContext) -> list[BaseAssistant]:
 
     admin 管理画面で base assistant 一覧を表示するため。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else admin_base_assistant_usecase_context()
+    with ctx.database.connect() as conn:
         return BaseAssistantRepository(conn).list_active()

@@ -7,12 +7,11 @@ from ._support import (
     updated_user_assistant,
     validate_user_fields,
 )
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 from .errors import AssistantUsecaseError
 
 
 def update_user_assistant(
-    context: UsecaseContext,
     *,
     actor: User,
     user_assistant_id: str,
@@ -21,6 +20,7 @@ def update_user_assistant(
     description: str,
     user_prompts: list[str],
     visibility: AssistantVisibility,
+    context: AssistantUsecaseContext | None = None,
 ) -> UserAssistant:
     """編集可能な UserAssistant を更新する。
 
@@ -36,12 +36,13 @@ def update_user_assistant(
     Returns:
         更新した UserAssistant。
     """
+    ctx = context if context is not None else assistant_usecase_context()
     validate_user_fields(
         base_assistant_id=base_assistant_id,
         name=name,
         visibility=visibility,
     )
-    with context.database.connect() as conn:
+    with ctx.database.connect() as conn:
         base_repo = BaseAssistantRepository(conn)
         user_repo = UserAssistantRepository(conn)
         assistant = user_repo.get(user_assistant_id)

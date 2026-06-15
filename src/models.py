@@ -291,7 +291,7 @@ class ConnectionProvider:
         description: 接続先の説明文。
         api_mode: OpenAI互換APIの利用モード。
         base_url: OpenAI互換サーバーのURL。既定APIの場合は None。
-        api_key: この接続先で使うAPI key。環境変数経由解決後の値。
+        api_key: この接続先で使うAPI key。
         allowed_models: この接続先で利用できるモデル名一覧。空なら制限なし。
         default_options: temperatureなど接続先の既定生成オプション。
     """

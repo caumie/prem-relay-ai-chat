@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from src.auth_password import verify_password
+from src.service.password import verify_password
 from src.infrastructure import (
     AttachmentRepository,
     AttachmentStorage,
@@ -11,14 +11,41 @@ from src.infrastructure import (
     UserAssistantRepository,
     utcnow,
 )
+from src.config import AppConfig
 from src.models import Attachment, UserAssistant
-from src.usecase.context import UsecaseContext
-from src.usecase.test_support import FakeResponseStarter
+from src.usecase.admin_user import (
+    AdminUserUsecaseContext,
+    admin_user_usecase_context,
+    create_user,
+    delete_user,
+    suspend_user,
+    update_user,
+)
+from src.usecase.runtime import init_usecase_runtime
 
-from .create_user import create_user
-from .delete_user import delete_user
-from .suspend_user import suspend_user
-from .update_user import update_user
+
+class TestAdminUserUsecaseContext:
+    """admin_user_usecase_context の依存抽出を検証する。"""
+
+    def test_contains_only_admin_user_dependencies(self, tmp_path: Path) -> None:
+        """共有runtimeからadmin userに必要な依存だけを取り出す。"""
+        # 観点: admin user usecase context がconfigを業務用依存へ変換すること。
+        # 目的: 管理ユーザー操作が広い共有contextではなく必要依存だけで動く境界を固定する。
+        config = AppConfig(
+            db_path=tmp_path / "chat.sqlite",
+            data_dir=tmp_path,
+            uploads_dir=tmp_path / "uploads",
+            session_secret="session-secret",
+            password_pepper="password-pepper",
+        )
+        runtime = init_usecase_runtime(config=config)
+
+        context = admin_user_usecase_context()
+
+        assert context.database == runtime.database
+        assert context.password_pepper == "password-pepper"
+        assert context.attachment_storage.uploads_dir == tmp_path / "uploads"
+        assert not hasattr(context, "response_service")
 
 
 def test_create_user_persists_trimmed_login_name_and_password_hash(
@@ -30,7 +57,7 @@ def test_create_user_persists_trimmed_login_name_and_password_hash(
     database = context.database
 
     created = create_user(
-        context, login_name="  user1  ", password="pass123", is_admin=True
+        login_name="  user1  ", password="pass123", is_admin=True, context=context
     )
 
     with database.connect() as conn:
@@ -52,15 +79,15 @@ def test_update_user_rewrites_login_name_admin_flag_and_password(
     context = _context(tmp_path)
     database = context.database
     created = create_user(
-        context, login_name="user1", password="pass123", is_admin=False
+        login_name="user1", password="pass123", is_admin=False, context=context
     )
 
     updated = update_user(
-        context,
         user_id=created.id,
         login_name="  user1-updated  ",
         password="pass456",
         is_admin=True,
+        context=context,
     )
 
     with database.connect() as conn:
@@ -80,10 +107,10 @@ def test_suspend_user_marks_user_as_suspended(tmp_path: Path) -> None:
     context = _context(tmp_path)
     database = context.database
     created = create_user(
-        context, login_name="user1", password="pass123", is_admin=False
+        login_name="user1", password="pass123", is_admin=False, context=context
     )
 
-    suspended = suspend_user(context, user_id=created.id)
+    suspended = suspend_user(user_id=created.id, context=context)
 
     with database.connect() as conn:
         stored = AuthRepository(conn).get_user(created.id)
@@ -100,9 +127,9 @@ def test_delete_user_removes_related_records_and_attachment_file(
     # 目的: 管理画面が削除順序や保存ファイル整合を知らずに削除処理を委譲できるようにする。
     context = _context(tmp_path)
     database = context.database
-    uploads_dir = context.uploads_dir
+    uploads_dir = context.attachment_storage.uploads_dir
     created = create_user(
-        context, login_name="user1", password="pass123", is_admin=False
+        login_name="user1", password="pass123", is_admin=False, context=context
     )
     stored_file = uploads_dir / str(created.id) / "photo.png"
     stored_file.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +168,7 @@ def test_delete_user_removes_related_records_and_attachment_file(
         )
         conn.commit()
 
-    deleted = delete_user(context, user_id=created.id)
+    deleted = delete_user(user_id=created.id, context=context)
 
     with database.connect() as conn:
         active_user = AuthRepository(conn).get_user(created.id)
@@ -171,16 +198,22 @@ def test_delete_user_removes_related_records_and_attachment_file(
     assert not stored_file.exists()
 
 
-def _context(tmp_path: Path) -> UsecaseContext:
-    """admin user ユースケース用のcontextを初期化して返す。"""
+def _context(tmp_path: Path) -> AdminUserUsecaseContext:
+    """admin user ユースケース用のcontextを初期化して返す。
+
+    Args:
+        tmp_path: テストごとの一時ディレクトリ。
+
+    Returns:
+        初期化済みDatabase、固定pepper、添付保存境界を持つcontext。
+
+    admin user ユースケースが必要とする依存だけで検証できるようにする。
+    """
     database = Database(tmp_path / "chat.sqlite")
     database.initialize()
     uploads_dir = tmp_path / "uploads"
-    return UsecaseContext(
+    return AdminUserUsecaseContext(
         database=database,
         password_pepper="pepper",
-        response_service=FakeResponseStarter(),
-        uploads_dir=uploads_dir,
         attachment_storage=AttachmentStorage(uploads_dir),
-        load_connection_providers=lambda: [],
     )

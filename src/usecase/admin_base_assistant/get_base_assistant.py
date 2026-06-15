@@ -3,11 +3,13 @@
 from ...infrastructure import BaseAssistantRepository
 from ...models import BaseAssistant
 from ..assistant.errors import AssistantUsecaseError
-from ..context import UsecaseContext
+from . import AdminBaseAssistantUsecaseContext, admin_base_assistant_usecase_context
 
 
 def get_base_assistant(
-    context: UsecaseContext, *, base_assistant_id: str
+    *,
+    base_assistant_id: str,
+    context: AdminBaseAssistantUsecaseContext | None = None,
 ) -> BaseAssistant:
     """編集対象の BaseAssistant を取得する。
 
@@ -19,7 +21,8 @@ def get_base_assistant(
 
     管理画面が編集対象の存在確認込みで取得できるようにするため。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else admin_base_assistant_usecase_context()
+    with ctx.database.connect() as conn:
         assistant = BaseAssistantRepository(conn).get(base_assistant_id)
     if assistant is None:
         raise AssistantUsecaseError("base assistant not found")

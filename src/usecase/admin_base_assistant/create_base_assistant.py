@@ -14,11 +14,10 @@ from ...models import (
     normalize_file_extensions,
 )
 from ..assistant.errors import AssistantUsecaseError
-from ..context import UsecaseContext
+from . import AdminBaseAssistantUsecaseContext, admin_base_assistant_usecase_context
 
 
 def create_base_assistant(
-    context: UsecaseContext,
     *,
     actor: User,
     name: str,
@@ -31,6 +30,7 @@ def create_base_assistant(
     allow_file_upload: bool,
     generation_config: AssistantGenerationConfig,
     allowed_file_extensions: list[str] | None = None,
+    context: AdminBaseAssistantUsecaseContext | None = None,
 ) -> BaseAssistant:
     """管理者入力を検証し、BaseAssistant を作成して返す。
 
@@ -52,8 +52,9 @@ def create_base_assistant(
 
     admin 管理画面の入力をこのユースケースだけで完結して保存できるようにするため。
     """
+    ctx = context if context is not None else admin_base_assistant_usecase_context()
     _require_admin(actor)
-    providers = context.load_connection_providers()
+    providers = ctx.load_connection_providers()
     _validate_fields(
         providers=providers,
         connection_provider_id=connection_provider_id,
@@ -61,7 +62,7 @@ def create_base_assistant(
         model=model,
         max_history_messages=max_history_messages,
     )
-    with context.database.connect() as conn:
+    with ctx.database.connect() as conn:
         assistant = BaseAssistantRepository(conn).save(
             BaseAssistant(
                 id=str(uuid4()),

@@ -5,15 +5,20 @@ from dataclasses import replace
 from ...infrastructure import ThreadRepository, utcnow
 from ...models import Thread
 from ._support import normalize_thread_title
-from ..context import UsecaseContext
+from . import ChatUsecaseContext, chat_usecase_context
 from .errors import ChatUsecaseError
 
 
 def rename_thread(
-    context: UsecaseContext, *, thread_id: str, user_id: int, title: str
+    *,
+    thread_id: str,
+    user_id: int,
+    title: str,
+    context: ChatUsecaseContext | None = None,
 ) -> Thread:
     """指定ユーザーが所有するスレッドのタイトルを更新する。"""
-    with context.database.connect() as conn:
+    ctx = context if context is not None else chat_usecase_context()
+    with ctx.database.connect() as conn:
         repo = ThreadRepository(conn)
         thread = repo.get(thread_id, user_id)
         if thread is None:

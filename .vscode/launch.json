@@ -10,7 +10,7 @@
             "request": "launch",
             "module": "uvicorn",
             "args": [
-                "src.app:app",
+                "src.app:build_app",
                 "--reload",
                 "--host",
                 "0.0.0.0"

@@ -49,6 +49,18 @@ def verify_password(password: str, password_hash: str, pepper: str) -> bool:
 
 
 def _password_digest(password: str, pepper: str, salt: bytes) -> bytes:
+    """パスワード、pepper、saltからPBKDF2 digestを生成する。
+
+    Args:
+        password: digest生成対象の平文パスワード。
+        pepper: アプリ全体で共有する秘密値。
+        salt: ハッシュごとに生成するランダム値。
+
+    Returns:
+        SHA-256を使ったPBKDF2 digest。
+
+    ハッシュ生成と照合で同じ導出処理を共有し、保存形式の差異を防ぐ。
+    """
     return hashlib.pbkdf2_hmac(
         "sha256",
         f"{password}:{pepper}".encode(),

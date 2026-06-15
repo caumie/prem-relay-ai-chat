@@ -1,7 +1,7 @@
 {
   "session_secret": "replace-with-a-long-random-secret",
+  "password_pepper": "replace-with-a-different-long-random-secret",
   "session_cookie_name": "new_chat_session",
-  "admin_login_name": "admin",
-  "admin_password": "adminpass",
-  "log_level": "DEBUG"
+  "session_cookie_secure": false,
+  "log_level": "INFO"
 }

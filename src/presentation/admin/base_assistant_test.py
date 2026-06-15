@@ -6,6 +6,10 @@ from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from src.presentation.test_support import (
+    usecase_runtime_for,
+    started_test_client,
+)
 
 from src.app import build_app
 from src.config import AppConfig
@@ -28,7 +32,7 @@ def test_admin_base_assistant_create_route_redirects_and_lists_assistant(
     # 目的: 作成usecaseの詳細ではなくHTTP入口の配線契約だけを固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     _write_provider_config(tmp_path)
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
     new_page = client.get("/admin/base-assistants/new")
 
@@ -62,7 +66,7 @@ def test_admin_base_assistant_update_route_redirects_and_lists_changes(
     # 目的: 更新usecaseへのHTTPフォーム配線を固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     assistant_id = _seed_base_assistant(app, tmp_path, "Ops")
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
     edit_page = client.get(f"/admin/base-assistants/{assistant_id}/edit")
 
@@ -94,7 +98,7 @@ def test_admin_base_assistant_delete_route_redirects_and_hides_assistant(
     # 目的: 削除usecaseへのHTTPフォーム配線を固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     assistant_id = _seed_base_assistant(app, tmp_path, "Ops")
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
     listed = client.get("/admin/base-assistants")
 
@@ -116,7 +120,7 @@ def test_admin_base_assistant_index_shows_base_specific_columns(
     # 目的: 個人アシスタント向けの表示分岐を持ち込まず、専用テンプレート責務を固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     _seed_base_assistant(app, tmp_path, "Default", allow_file_upload=True)
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
 
     response = client.get("/admin/base-assistants")
@@ -136,7 +140,7 @@ def test_base_assistant_form_shows_single_empty_user_prompt_by_default(
     # 目的: 初回入力時に最初の入力欄が開いた状態で表示される契約を固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     _write_provider_config(tmp_path)
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
 
     response = client.get("/admin/base-assistants/new")
@@ -157,7 +161,7 @@ def test_base_assistant_form_does_not_add_blank_user_prompt_when_editing(
         "Prompted",
         user_prompts=["一つ目", "二つ目"],
     )
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
 
     response = client.get(f"/admin/base-assistants/{assistant_id}/edit")
@@ -175,7 +179,7 @@ def test_base_assistant_form_shows_empty_user_prompt_when_editing_without_prompt
     # 目的: 編集画面でプロンプトを追加できる入口を視覚的に分かる状態にする。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     assistant_id = _seed_base_assistant(app, tmp_path, "Empty Prompt", user_prompts=[])
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
 
     response = client.get(f"/admin/base-assistants/{assistant_id}/edit")
@@ -191,10 +195,12 @@ def _config(tmp_path: Path) -> AppConfig:
         data_dir=tmp_path,
         uploads_dir=tmp_path / "uploads",
         session_secret="test-secret",
+        password_pepper="test-pepper",
     )
 
 
 def _login(client: TestClient) -> None:
+    _ensure_initial_admin(client)
     login_token = _csrf_token(client.get("/login").text)
     response = client.post(
         "/login",
@@ -202,6 +208,23 @@ def _login(client: TestClient) -> None:
             "login_name": "admin",
             "password": "adminpass",
             "_csrf_token": login_token,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def _ensure_initial_admin(client: TestClient) -> None:
+    """初回セットアップ画面から既定管理者を用意する。"""
+    page = client.get("/setup/admin", follow_redirects=False)
+    if page.status_code != 200:
+        return
+    response = client.post(
+        "/setup/admin",
+        data={
+            "login_name": "admin",
+            "password": "adminpass",
+            "_csrf_token": _csrf_token(page.text),
         },
         follow_redirects=False,
     )
@@ -217,7 +240,7 @@ def _seed_base_assistant(
     user_prompts: list[str] | None = None,
 ) -> str:
     _write_provider_config(tmp_path)
-    database = app.state.database
+    database = usecase_runtime_for(app).database
     with database.connect() as conn:
         created = BaseAssistantRepository(conn).save(
             BaseAssistant(

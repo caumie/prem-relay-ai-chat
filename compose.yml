@@ -1,0 +1,11 @@
+name: "prem-relay-ai-chat"
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "43210:8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -21,8 +21,8 @@ from ...models import (
     Thread,
     normalize_chat_input,
 )
-from ..assistant import resolve_runtime_assistant
-from ..context import UsecaseContext
+from ..assistant import AssistantUsecaseContext, resolve_runtime_assistant
+from . import ChatUsecaseContext
 from .save_message_attachments import save_message_attachments
 
 
@@ -70,7 +70,7 @@ def create_chat_messages(
 
 
 def start_response(
-    context: UsecaseContext,
+    context: ChatUsecaseContext,
     *,
     user_id: int,
     assistant_message: Message,
@@ -85,9 +85,9 @@ def start_response(
     ]
     with context.database.connect() as conn:
         assistant = resolve_runtime_assistant(
-            context,
             user_id=user_id,
             assistant_id=assistant_message.assistant_id or "",
+            context=_assistant_context(context),
         )
         attachments = AttachmentRepository(conn).list_by_ids_for_user(
             attachment_ids=attachment_ids,
@@ -134,7 +134,7 @@ def normalize_thread_title(title: str) -> str:
 
 
 async def create_thread_mutation(
-    context: UsecaseContext,
+    context: ChatUsecaseContext,
     *,
     user_id: int,
     content: str,
@@ -144,51 +144,55 @@ async def create_thread_mutation(
 ) -> ChatMutationResult:
     """新規チャット保存と応答開始の共通処理を実行する。"""
     selected = resolve_runtime_assistant(
-        context,
         user_id=user_id,
         assistant_id=assistant_id or "",
+        context=_assistant_context(context),
     )
     with context.database.connect() as conn:
-        saved_attachments = [
-            *attachments,
-            *await save_message_attachments(
-                context,
+        uploaded_attachments: list[Attachment] = []
+        try:
+            uploaded_attachments = await save_message_attachments(
                 user_id=user_id,
                 assistant_id=selected.id,
                 uploads=uploads,
                 conn=conn,
-            ),
-        ]
-        text = normalize_chat_input(content, len(saved_attachments))
-        threads = ThreadRepository(conn)
-        messages = MessageRepository(conn)
-        title = (
-            text or saved_attachments[0].original_filename
-            if saved_attachments
-            else text
-        )
-        now = utcnow()
-        thread = threads.save(
-            Thread(
-                id=str(uuid4()),
-                user_id=user_id,
-                title=normalize_thread_title(title),
-                created_at=now,
-                updated_at=now,
+                context=context,
             )
-        )
-        user_message, assistant_message = create_chat_messages(
-            user_id=user_id,
-            thread_id=thread.id,
-            content=text,
-            assistant_id=selected.id,
-            attachments=saved_attachments,
-        )
-        saved_user = messages.save(user_message)
-        saved_assistant = messages.save(assistant_message)
-        threads.touch(thread.id)
-        history = messages.list_by_thread(thread.id)
-        conn.commit()
+            saved_attachments = [*attachments, *uploaded_attachments]
+            text = normalize_chat_input(content, len(saved_attachments))
+            threads = ThreadRepository(conn)
+            messages = MessageRepository(conn)
+            title = (
+                text or saved_attachments[0].original_filename
+                if saved_attachments
+                else text
+            )
+            now = utcnow()
+            thread = threads.save(
+                Thread(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    title=normalize_thread_title(title),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            user_message, assistant_message = create_chat_messages(
+                user_id=user_id,
+                thread_id=thread.id,
+                content=text,
+                assistant_id=selected.id,
+                attachments=saved_attachments,
+            )
+            saved_user = messages.save(user_message)
+            saved_assistant = messages.save(assistant_message)
+            threads.touch(thread.id)
+            history = messages.list_by_thread(thread.id)
+            conn.commit()
+        except BaseException:
+            # DB rollbackでは保存済みファイル実体を戻せないため、commit前の失敗を補償する。
+            _delete_uploaded_attachments(context, uploaded_attachments)
+            raise
     start_response(
         context,
         user_id=user_id,
@@ -203,7 +207,7 @@ async def create_thread_mutation(
 
 
 async def append_thread_mutation(
-    context: UsecaseContext,
+    context: ChatUsecaseContext,
     *,
     user_id: int,
     thread_id: str,
@@ -214,39 +218,45 @@ async def append_thread_mutation(
 ) -> ChatMutationResult | None:
     """既存スレッドへの投稿保存と応答開始を実行する。"""
     selected = resolve_runtime_assistant(
-        context,
         user_id=user_id,
         assistant_id=assistant_id or "",
+        context=_assistant_context(context),
     )
     with context.database.connect() as conn:
-        saved_attachments = [
-            *attachments,
-            *await save_message_attachments(
-                context,
+        threads = ThreadRepository(conn)
+        messages = MessageRepository(conn)
+        # 存在しない投稿先のためにファイル実体を作らないよう、添付保存より先に確認する。
+        thread = threads.get(thread_id, user_id)
+        if thread is None:
+            return None
+
+        uploaded_attachments: list[Attachment] = []
+        try:
+            uploaded_attachments = await save_message_attachments(
                 user_id=user_id,
                 assistant_id=selected.id,
                 uploads=uploads,
                 conn=conn,
-            ),
-        ]
-        text = normalize_chat_input(content, len(saved_attachments))
-        threads = ThreadRepository(conn)
-        messages = MessageRepository(conn)
-        thread = threads.get(thread_id, user_id)
-        if thread is None:
-            return None
-        user_message, assistant_message = create_chat_messages(
-            user_id=user_id,
-            thread_id=thread_id,
-            content=text,
-            assistant_id=selected.id,
-            attachments=saved_attachments,
-        )
-        saved_user = messages.save(user_message)
-        saved_assistant = messages.save(assistant_message)
-        threads.touch(thread_id)
-        history = messages.list_by_thread(thread_id)
-        conn.commit()
+                context=context,
+            )
+            saved_attachments = [*attachments, *uploaded_attachments]
+            text = normalize_chat_input(content, len(saved_attachments))
+            user_message, assistant_message = create_chat_messages(
+                user_id=user_id,
+                thread_id=thread_id,
+                content=text,
+                assistant_id=selected.id,
+                attachments=saved_attachments,
+            )
+            saved_user = messages.save(user_message)
+            saved_assistant = messages.save(assistant_message)
+            threads.touch(thread_id)
+            history = messages.list_by_thread(thread_id)
+            conn.commit()
+        except BaseException:
+            # transaction失敗時も実ファイルは残るため、新規アップロードだけを削除する。
+            _delete_uploaded_attachments(context, uploaded_attachments)
+            raise
     start_response(
         context,
         user_id=user_id,
@@ -258,3 +268,30 @@ async def append_thread_mutation(
         user_message=saved_user,
         assistant_message=saved_assistant,
     )
+
+
+def _assistant_context(context: ChatUsecaseContext) -> AssistantUsecaseContext:
+    """chat context から assistant 解決に必要な依存だけを取り出す。"""
+    return AssistantUsecaseContext(
+        database=context.database,
+        load_connection_providers=context.load_connection_providers,
+    )
+
+
+def _delete_uploaded_attachments(
+    context: ChatUsecaseContext,
+    attachments: list[Attachment],
+) -> None:
+    """commit前に失敗した投稿で新規保存した添付ファイル実体を削除する。
+
+    Args:
+        context: 添付ファイル実体の保存境界を持つチャットユースケース依存。
+        attachments: 今回の投稿でアップロードから新規保存した添付一覧。
+
+    Returns:
+        None。
+
+    既存添付を誤って削除せず、DB transaction外の副作用だけを補償するため。
+    """
+    for attachment in attachments:
+        context.attachment_storage.delete(attachment.stored_path)

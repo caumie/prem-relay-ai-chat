@@ -138,6 +138,20 @@ class AttachmentStorage:
             raise ValueError("invalid attachment path")
         return path
 
+    def delete(self, stored_path: str) -> None:
+        """保存相対パスに対応する実ファイルを削除する。
+
+        Args:
+            stored_path: DB metadata に保持している uploads_dir 相対パス。
+
+        Returns:
+            None。
+
+        安全なパス解決と存在しないファイルの扱いをストレージ境界へ閉じ込め、
+        usecaseがファイルシステムの詳細を持たずに補償処理を行えるようにする。
+        """
+        self.resolve(stored_path).unlink(missing_ok=True)
+
 
 def _safe_filename(filename: str) -> str:
     """保存ファイル名に使えるASCII文字へ正規化する。

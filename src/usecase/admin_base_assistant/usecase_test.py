@@ -2,11 +2,10 @@
 
 from pathlib import Path
 
-from src.infrastructure import AttachmentStorage, BaseAssistantRepository, Database
+from src.infrastructure import BaseAssistantRepository, Database
 from src.models import ConnectionProvider
 from src.models import User
-from src.usecase.context import UsecaseContext
-from src.usecase.test_support import FakeResponseStarter
+from src.usecase.admin_base_assistant import AdminBaseAssistantUsecaseContext
 
 from .create_base_assistant import create_base_assistant
 from .delete_base_assistant import delete_base_assistant
@@ -22,7 +21,7 @@ def test_create_base_assistant_persists_trimmed_prompts_and_fields(
     database = context.database
 
     created = create_base_assistant(
-        context,
+        context=context,
         actor=_admin(),
         name=" Ops ",
         description=" 運用用 ",
@@ -58,7 +57,7 @@ def test_create_base_assistant_accepts_nested_generation_config(
     database = context.database
 
     created = create_base_assistant(
-        context,
+        context=context,
         actor=_admin(),
         name="Reasoning",
         description="推論設定",
@@ -86,7 +85,7 @@ def test_update_base_assistant_rewrites_existing_fields(tmp_path: Path) -> None:
     # 目的: 編集画面が更新前後の差分計算を持たずに更新処理を委譲できるようにする。
     context = _context(tmp_path)
     created = create_base_assistant(
-        context,
+        context=context,
         actor=_admin(),
         name="Ops",
         description="運用用",
@@ -101,7 +100,7 @@ def test_update_base_assistant_rewrites_existing_fields(tmp_path: Path) -> None:
     )
 
     updated = update_base_assistant(
-        context,
+        context=context,
         actor=_admin(),
         base_assistant_id=created.id,
         name="Ops Updated",
@@ -133,7 +132,7 @@ def test_delete_base_assistant_logically_hides_assistant(tmp_path: Path) -> None
     context = _context(tmp_path)
     database = context.database
     created = create_base_assistant(
-        context,
+        context=context,
         actor=_admin(),
         name="Ops",
         description="運用用",
@@ -148,7 +147,7 @@ def test_delete_base_assistant_logically_hides_assistant(tmp_path: Path) -> None
     )
 
     deleted = delete_base_assistant(
-        context, actor=_admin(), base_assistant_id=created.id
+        context=context, actor=_admin(), base_assistant_id=created.id
     )
 
     with database.connect() as conn:
@@ -158,17 +157,12 @@ def test_delete_base_assistant_logically_hides_assistant(tmp_path: Path) -> None
     assert stored is None
 
 
-def _context(tmp_path: Path) -> UsecaseContext:
+def _context(tmp_path: Path) -> AdminBaseAssistantUsecaseContext:
     """admin base assistant ユースケース用のcontextを初期化して返す。"""
     database = Database(tmp_path / "chat.sqlite")
     database.initialize()
-    uploads_dir = tmp_path / "uploads"
-    return UsecaseContext(
+    return AdminBaseAssistantUsecaseContext(
         database=database,
-        password_pepper="pepper",
-        response_service=FakeResponseStarter(),
-        uploads_dir=uploads_dir,
-        attachment_storage=AttachmentStorage(uploads_dir),
         load_connection_providers=_providers,
     )
 

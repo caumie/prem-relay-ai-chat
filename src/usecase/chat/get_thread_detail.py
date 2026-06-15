@@ -2,14 +2,15 @@
 
 from ...infrastructure import ChatThreadQuery
 from ...models import ThreadDetail
-from ..context import UsecaseContext
+from . import ChatUsecaseContext, chat_usecase_context
 
 
 def get_thread_detail(
-    context: UsecaseContext, *, thread_id: str, user_id: int
+    *, thread_id: str, user_id: int, context: ChatUsecaseContext | None = None
 ) -> ThreadDetail | None:
     """指定ユーザーが所有するスレッド詳細を取得する。"""
-    with context.database.connect() as conn:
+    ctx = context if context is not None else chat_usecase_context()
+    with ctx.database.connect() as conn:
         return ChatThreadQuery(conn).get_detail_for_user(
             thread_id=thread_id,
             user_id=user_id,

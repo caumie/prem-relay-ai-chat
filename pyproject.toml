@@ -1,5 +1,5 @@
 [project]
-name = "chat"
+name = "prem-relay-ai-chat"
 version = "0.1.0"
 description = "Chat with AI using OpenAI GPT models with SSE streaming"
 readme = "README.md"
@@ -12,12 +12,11 @@ dependencies = [
     "openai>=1.0.0",
     "itsdangerous>=2.2.0",
     "pydantic>=2.0.0",
-    "pyright>=1.1.409",
-    "isort>=8.0.1",
 ]
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.410",
     "pytest>=9.0.1",
 ]
 

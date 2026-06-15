@@ -6,18 +6,20 @@ from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from src.presentation.test_support import (
+    usecase_runtime_for,
+    started_test_client,
+)
 
 from src.app import build_app
-from src.auth_password import hash_password
 from src.config import AppConfig
 from src.infrastructure import (
-    AuthRepository,
     BaseAssistantRepository,
-    Database,
     UserAssistantRepository,
 )
 from src.models import BaseAssistant, LlmMessage, User, UserAssistant
 from src.service.response_service import StreamEvent
+from src.usecase.admin_user import AdminUserUsecaseContext, create_user
 
 
 class FakeResponder:
@@ -34,17 +36,17 @@ def test_admin_user_assistants_index_shows_creator_and_missing_base(
     # 目的: BaseAssistant削除後も割り当てなしとして編集可能な状態を固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     base_id = _seed_base_assistant(app, tmp_path, "Default")
-    creator = _save_user(app.state.database, "creator1", "pass123")
+    creator = _create_user(app, "creator1", "pass123")
     _seed_user_assistant(
         app,
         base_id=base_id,
         owner_user_id=creator.id,
         name="Creator Assistant",
     )
-    with app.state.database.connect() as conn:
+    with usecase_runtime_for(app).database.connect() as conn:
         BaseAssistantRepository(conn).logical_delete(base_assistant_id=base_id)
         conn.commit()
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
 
     response = client.get("/admin/user-assistants")
@@ -62,7 +64,7 @@ def test_admin_user_assistant_create_route_redirects_and_lists_assistant(
     # 目的: admin user assistant作成のHTTP入口配線を固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
     base_id = _seed_base_assistant(app, tmp_path, "Default")
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
     new_page = client.get("/admin/user-assistants/new")
 
@@ -97,7 +99,7 @@ def test_admin_user_assistant_update_route_redirects_and_lists_changes(
         owner_user_id=1,
         name="Managed",
     )
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
     edit_page = client.get(f"/admin/user-assistants/{assistant_id}/edit")
 
@@ -132,7 +134,7 @@ def test_admin_user_assistant_delete_route_redirects_and_hides_assistant(
         owner_user_id=1,
         name="Managed",
     )
-    client = TestClient(app)
+    client = started_test_client(app)
     _login(client)
     listed = client.get("/admin/user-assistants")
 
@@ -153,10 +155,12 @@ def _config(tmp_path: Path) -> AppConfig:
         data_dir=tmp_path,
         uploads_dir=tmp_path / "uploads",
         session_secret="test-secret",
+        password_pepper="test-pepper",
     )
 
 
 def _login(client: TestClient) -> None:
+    _ensure_initial_admin(client)
     login_token = _csrf_token(client.get("/login").text)
     response = client.post(
         "/login",
@@ -170,9 +174,26 @@ def _login(client: TestClient) -> None:
     assert response.status_code == 303
 
 
+def _ensure_initial_admin(client: TestClient) -> None:
+    """初回セットアップ画面から既定管理者を用意する。"""
+    page = client.get("/setup/admin", follow_redirects=False)
+    if page.status_code != 200:
+        return
+    response = client.post(
+        "/setup/admin",
+        data={
+            "login_name": "admin",
+            "password": "adminpass",
+            "_csrf_token": _csrf_token(page.text),
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
 def _seed_base_assistant(app: FastAPI, tmp_path: Path, name: str) -> str:
     _write_provider_config(tmp_path)
-    with app.state.database.connect() as conn:
+    with usecase_runtime_for(app).database.connect() as conn:
         created = BaseAssistantRepository(conn).save(
             BaseAssistant(
                 id=str(uuid4()),
@@ -198,7 +219,8 @@ def _seed_user_assistant(
     owner_user_id: int,
     name: str,
 ) -> str:
-    with app.state.database.connect() as conn:
+    _ensure_user_exists(app, user_id=owner_user_id)
+    with usecase_runtime_for(app).database.connect() as conn:
         created = UserAssistantRepository(conn).save(
             UserAssistant(
                 id=str(uuid4()),
@@ -214,14 +236,49 @@ def _seed_user_assistant(
         return created.id
 
 
-def _save_user(database: Database, login_name: str, password: str) -> User:
-    with database.connect() as conn:
-        user = AuthRepository(conn).save(
-            User(id=0, login_name=login_name),
-            password_hash=hash_password(password, "test-secret"),
-        )
-        conn.commit()
-        return user
+def _ensure_user_exists(app: FastAPI, *, user_id: int) -> None:
+    """直接seedで参照するユーザーを不足時だけ作成する。"""
+    with usecase_runtime_for(app).database.connect() as conn:
+        if conn.execute(
+            "select 1 from active_users where id = :id",
+            {"id": user_id},
+        ).fetchone():
+            return
+    create_user(
+        login_name="admin" if user_id == 1 else f"user{user_id}",
+        password="adminpass" if user_id == 1 else "pass123",
+        is_admin=user_id == 1,
+        context=AdminUserUsecaseContext(
+            database=usecase_runtime_for(app).database,
+            password_pepper="test-pepper",
+            attachment_storage=usecase_runtime_for(app).attachment_storage,
+        ),
+    )
+
+
+def _create_user(app: FastAPI, login_name: str, password: str) -> User:
+    """admin user作成ユースケースでテストユーザーを作る。
+
+    Args:
+        app: build_appで生成したFastAPIアプリ。
+        login_name: 作成するログイン名。
+        password: 作成するユーザーの平文パスワード。
+
+    Returns:
+        作成済みユーザー。
+
+    routeテストがユーザー保存形式を直接持たずに所有者前提を作れるようにする。
+    """
+    return create_user(
+        login_name=login_name,
+        password=password,
+        is_admin=False,
+        context=AdminUserUsecaseContext(
+            database=usecase_runtime_for(app).database,
+            password_pepper="test-pepper",
+            attachment_storage=usecase_runtime_for(app).attachment_storage,
+        ),
+    )
 
 
 def _write_provider_config(tmp_path: Path) -> None:

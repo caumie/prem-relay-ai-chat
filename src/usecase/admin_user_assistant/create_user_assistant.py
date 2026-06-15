@@ -5,11 +5,10 @@ from uuid import uuid4
 from ...infrastructure import BaseAssistantRepository, UserAssistantRepository
 from ...models import AssistantVisibility, User, UserAssistant, UserInputError
 from ..assistant.errors import AssistantUsecaseError
-from ..context import UsecaseContext
+from . import AdminUserAssistantUsecaseContext, admin_user_assistant_usecase_context
 
 
 def create_user_assistant(
-    context: UsecaseContext,
     *,
     actor: User,
     base_assistant_id: str | None,
@@ -17,6 +16,7 @@ def create_user_assistant(
     description: str,
     user_prompts: list[str],
     visibility: AssistantVisibility,
+    context: AdminUserAssistantUsecaseContext | None = None,
 ) -> UserAssistant:
     """admin が所有する UserAssistant を作成する。
 
@@ -33,13 +33,14 @@ def create_user_assistant(
 
     admin 管理画面の作成処理を user 向け usecase に依存せず独立して扱うため。
     """
+    ctx = context if context is not None else admin_user_assistant_usecase_context()
     _require_admin(actor)
     _validate_fields(
         base_assistant_id=base_assistant_id,
         name=name,
         visibility=visibility,
     )
-    with context.database.connect() as conn:
+    with ctx.database.connect() as conn:
         base_repo = BaseAssistantRepository(conn)
         if base_assistant_id is None or base_repo.get(base_assistant_id) is None:
             raise UserInputError("base assistant is required")

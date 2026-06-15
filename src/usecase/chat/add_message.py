@@ -1,13 +1,12 @@
 """既存スレッドへの投稿ユースケースを担当する。"""
 
 from ...models import Attachment, PendingUpload
-from ..context import UsecaseContext
+from . import ChatUsecaseContext, chat_usecase_context
 from ._support import ChatMutationResult, append_thread_mutation
 from .errors import ChatUsecaseError
 
 
 async def add_message(
-    context: UsecaseContext,
     *,
     user_id: int,
     thread_id: str,
@@ -15,6 +14,7 @@ async def add_message(
     assistant_id: str | None,
     attachments: list[Attachment] | None = None,
     uploads: list[PendingUpload] | None = None,
+    context: ChatUsecaseContext | None = None,
 ) -> ChatMutationResult:
     """既存スレッドへ添付、ユーザー発言、assistant placeholderを追加する。
 
@@ -24,15 +24,16 @@ async def add_message(
         content: フォームから受け取った本文。
         assistant_id: 投稿先assistant ID。
         attachments: すでに保存済みの添付metadata。
-        uploads: presentation層でFastAPI型から変換した未保存アップロード一覧。
+        uploads: presentation層で変換した未保存アップロード一覧。
 
     Returns:
         更新対象Threadと追加Messageの組。
 
     投稿時の添付保存をusecase内へ置き、HTTP層がDB保存順序を持たないようにする。
     """
+    ctx = context if context is not None else chat_usecase_context()
     result = await append_thread_mutation(
-        context,
+        ctx,
         user_id=user_id,
         thread_id=thread_id,
         content=content,

@@ -1,11 +1,9 @@
 """ユーザー向け assistant 管理画面の HTML router を担当する。"""
 
-from collections.abc import Awaitable, Callable
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from starlette.datastructures import FormData
 
 from ..models import (
@@ -26,15 +24,11 @@ from ..usecase.assistant import (
 from ..usecase.assistant.list_selectable_base_assistants import (
     list_selectable_base_assistants,
 )
-from ..usecase.context import UsecaseContext
+from .context import current_user, presentation_templates, shell_context
 from .util.csrf import verify_csrf_token
 
 
 router = APIRouter()
-templates: Jinja2Templates | None = None
-_current_user: Callable[[Request], Awaitable[User]] | None = None
-_shell_context: Callable[[Request, User], dict[str, object]] | None = None
-_usecase_context: UsecaseContext | None = None
 
 
 class UserAssistantFormPayload(TypedDict):
@@ -46,74 +40,21 @@ class UserAssistantFormPayload(TypedDict):
     user_prompts: list[str]
     visibility: AssistantVisibility
 
-
-def configure_assistant_routes(
-    *,
-    usecase_context: UsecaseContext,
-    current_user: Callable[[Request], Awaitable[User]],
-    shell_context: Callable[[Request, User], dict[str, object]],
-) -> None:
-    """assistant router で使う依存関係を設定する。
-
-    Args:
-        current_user: 現在ユーザーを返す依存関係。
-        shell_context: 共通テンプレート context を作る関数。
-
-    Returns:
-        None。
-    """
-    global _current_user, _shell_context, _usecase_context
-    _usecase_context = usecase_context
-    _current_user = current_user
-    _shell_context = shell_context
-
-
-async def _current_user_dependency(request: Request) -> User:
-    """assistant router 用の現在ユーザー依存関係を返す。"""
-    if _current_user is None:
-        raise RuntimeError("Assistant current_user dependency is not configured")
-    return await _current_user(request)
-
-
-def _templates() -> Jinja2Templates:
-    """assistant router で利用するテンプレート設定を返す。"""
-    if templates is None:
-        raise RuntimeError("Assistant templates are not configured")
-    return templates
-
-
-def _shell_page_context(
-    request: Request,
-    user: User,
-) -> dict[str, object]:
-    """assistant 画面共通の shell context を返す。"""
-    if _shell_context is None:
-        raise RuntimeError("Assistant shell_context is not configured")
-    return _shell_context(request, user)
-
-
-def _context() -> UsecaseContext:
-    """assistant routerで利用するusecase contextを返す。"""
-    if _usecase_context is None:
-        raise RuntimeError("Assistant usecase context is not configured")
-    return _usecase_context
-
-
 @router.get("/assistants", response_class=HTMLResponse)
 async def user_assistants(
     request: Request,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> HTMLResponse:
     """現在ユーザーが管理できるマイアシスタント一覧を表示する。"""
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "user_assistant_index.html",
         {
-            **_shell_page_context(request, user),
-            "assistants": list_manageable_user_assistants(_context(), user),
+            **shell_context(request, user),
+            "assistants": list_manageable_user_assistants(user),
             "base_assistant_names": {
                 assistant.id: assistant.name
-                for assistant in list_selectable_base_assistants(_context())
+                for assistant in list_selectable_base_assistants()
             },
         },
     )
@@ -122,16 +63,16 @@ async def user_assistants(
 @router.get("/assistants/new", response_class=HTMLResponse)
 async def user_assistant_new(
     request: Request,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> HTMLResponse:
     """現在ユーザー向けマイアシスタント作成フォームを表示する。"""
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "user_assistant_form.html",
         {
-            **_shell_page_context(request, user),
+            **shell_context(request, user),
             **_user_assistant_form_context(
-                base_assistants=list_selectable_base_assistants(_context()),
+                base_assistants=list_selectable_base_assistants(),
                 assistant=None,
             ),
         },
@@ -142,12 +83,11 @@ async def user_assistant_new(
 async def user_assistant_create(
     request: Request,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> Response:
     """現在ユーザー向けマイアシスタント作成フォームを処理する。"""
     try:
         create_user_assistant(
-            _context(),
             actor=user,
             **await _user_assistant_form_payload(request),
         )
@@ -160,24 +100,23 @@ async def user_assistant_create(
 async def user_assistant_edit(
     request: Request,
     assistant_id: str,
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> HTMLResponse:
     """現在ユーザー向けマイアシスタント編集フォームを表示する。"""
     try:
         assistant = get_manageable_user_assistant(
-            _context(),
             actor=user,
             user_assistant_id=assistant_id,
         )
     except AssistantUsecaseError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return _templates().TemplateResponse(
+    return presentation_templates().TemplateResponse(
         request,
         "user_assistant_form.html",
         {
-            **_shell_page_context(request, user),
+            **shell_context(request, user),
             **_user_assistant_form_context(
-                base_assistants=list_selectable_base_assistants(_context()),
+                base_assistants=list_selectable_base_assistants(),
                 assistant=assistant,
             ),
         },
@@ -189,12 +128,11 @@ async def user_assistant_update(
     request: Request,
     assistant_id: str,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> Response:
     """現在ユーザー向けマイアシスタント編集フォームを処理する。"""
     try:
         update_user_assistant(
-            _context(),
             actor=user,
             user_assistant_id=assistant_id,
             **await _user_assistant_form_payload(request),
@@ -210,12 +148,11 @@ async def user_assistant_update(
 async def user_assistant_delete(
     assistant_id: str,
     _: None = Depends(verify_csrf_token),
-    user: User = Depends(_current_user_dependency),
+    user: User = Depends(current_user),
 ) -> Response:
     """現在ユーザー向けマイアシスタント削除を処理する。"""
     try:
         delete_user_assistant(
-            _context(),
             actor=user,
             user_assistant_id=assistant_id,
         )

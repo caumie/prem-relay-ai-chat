@@ -1,0 +1,14 @@
+.git
+.github
+.pytest_cache
+.venv
+__pycache__
+*.py[cod]
+data/data.sqlite-shm
+data/data.sqlite-wal
+data/app_config.json
+data/connection_providers.json
+data/data.sqlite
+data/logs/*
+data/uploads/*
+docs

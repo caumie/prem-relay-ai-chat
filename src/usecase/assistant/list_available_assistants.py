@@ -2,11 +2,11 @@
 
 from ...infrastructure import AssistantSelectionQuery
 from ...models import AssistantOption
-from ..context import UsecaseContext
+from . import AssistantUsecaseContext, assistant_usecase_context
 
 
 def list_available_assistants(
-    context: UsecaseContext, *, user_id: int
+    *, user_id: int, context: AssistantUsecaseContext | None = None
 ) -> list[AssistantOption]:
     """チャットで選択できる Assistant 一覧を返す。
 
@@ -16,5 +16,6 @@ def list_available_assistants(
     Returns:
         表示カテゴリ順に並んだ AssistantOption 一覧。
     """
-    with context.database.connect() as conn:
+    ctx = context if context is not None else assistant_usecase_context()
+    with ctx.database.connect() as conn:
         return AssistantSelectionQuery(conn).list_chat_options(user_id)

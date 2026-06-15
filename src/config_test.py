@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 
 import pytest
-from pytest import MonkeyPatch
 
 from src.config import (
     AppConfig,
@@ -23,14 +22,14 @@ def test_load_app_config_requires_app_config_file(tmp_path: Path) -> None:
 
 def test_load_app_config_reads_application_settings_from_json(tmp_path: Path) -> None:
     # 観点: app_config.jsonからアプリ全体の運用設定を読み込めること。
-    # 目的: cookie名、初期管理者、ログレベルをコード変更なしで変えられる境界を固定する。
+    # 目的: cookie名とログレベルをコード変更なしで変えられる境界を固定する。
     (tmp_path / "app_config.json").write_text(
         json.dumps(
             {
                 "session_secret": "secret",
+                "password_pepper": "pepper",
                 "session_cookie_name": "custom_session",
-                "admin_login_name": "root",
-                "admin_password": "rootpass",
+                "session_cookie_secure": True,
                 "log_level": "INFO",
             }
         ),
@@ -45,9 +44,9 @@ def test_load_app_config_reads_application_settings_from_json(tmp_path: Path) ->
         db_path=tmp_path / "data.sqlite",
         uploads_dir=tmp_path / "uploads",
         session_secret="secret",
+        password_pepper="pepper",
         session_cookie_name="custom_session",
-        admin_login_name="root",
-        admin_password="rootpass",
+        session_cookie_secure=True,
         log_level="INFO",
     )
 
@@ -56,11 +55,45 @@ def test_load_app_config_requires_session_secret(tmp_path: Path) -> None:
     # 観点: session_secretがないapp_config.jsonでは起動設定を作らないこと。
     # 目的: セッション署名秘密値を必須設定にし、自動生成や空値での起動を防ぐ。
     (tmp_path / "app_config.json").write_text(
-        json.dumps({"log_level": "WARNING", "admin_login_name": "owner"}),
+        json.dumps({"log_level": "WARNING"}),
         encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="session_secret"):
+        load_app_config(tmp_path)
+
+
+def test_load_app_config_requires_password_pepper(tmp_path: Path) -> None:
+    # 観点: password_pepperがないapp_config.jsonでは起動設定を作らないこと。
+    # 目的: パスワード用秘密値をsession_secretから分離し、空値での起動を防ぐ。
+    (tmp_path / "app_config.json").write_text(
+        json.dumps({"session_secret": "secret"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="password_pepper"):
+        load_app_config(tmp_path)
+
+
+@pytest.mark.parametrize("value", [None, "true", 1])
+def test_load_app_config_requires_boolean_session_cookie_secure(
+    tmp_path: Path,
+    value: object,
+) -> None:
+    # 観点: session_cookie_secureはJSONの真偽値だけを受け付けること。
+    # 目的: CookieのSecure属性が設定値の型違いで意図せず無効になることを防ぐ。
+    config: dict[str, object] = {
+        "session_secret": "secret",
+        "password_pepper": "pepper",
+    }
+    if value is not None:
+        config["session_cookie_secure"] = value
+    (tmp_path / "app_config.json").write_text(
+        json.dumps(config),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="session_cookie_secure"):
         load_app_config(tmp_path)
 
 
@@ -72,9 +105,9 @@ def test_app_config_example_json_exists() -> None:
     assert sample.is_file()
     loaded = json.loads(sample.read_text(encoding="utf-8"))
     assert isinstance(loaded.get("session_secret"), str)
+    assert isinstance(loaded.get("password_pepper"), str)
     assert isinstance(loaded.get("session_cookie_name"), str)
-    assert isinstance(loaded.get("admin_login_name"), str)
-    assert isinstance(loaded.get("admin_password"), str)
+    assert isinstance(loaded.get("session_cookie_secure"), bool)
     assert isinstance(loaded.get("log_level"), str)
 
 
@@ -86,41 +119,6 @@ def test_load_connection_providers_returns_default_when_file_is_missing(
     providers = load_connection_providers(tmp_path)
 
     assert providers == [default_connection_provider()]
-
-
-def test_load_connection_providers_reads_api_key_from_env(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    # 観点: Provider定義のapi_key_envから秘密情報を読み込み、DBへ持ち込まないこと。
-    # 目的: 接続先秘密情報を固定JSONと環境変数の責務へ分離する。
-    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
-    (tmp_path / "connection_providers.json").write_text(
-        json.dumps(
-            {
-                "providers": [
-                    {
-                        "id": "openai",
-                        "name": "OpenAI",
-                        "description": "Responses",
-                        "api_mode": "responses",
-                        "base_url": "https://api.openai.com/v1",
-                        "api_key_env": "OPENAI_API_KEY",
-                        "allowed_models": ["gpt-5", "gpt-5-mini"],
-                        "default_options": {"temperature": 0.2},
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    provider = load_connection_providers(tmp_path)[0]
-
-    assert provider.id == "openai"
-    assert provider.api_key == "env-secret"
-    assert provider.allowed_models == ["gpt-5", "gpt-5-mini"]
-    assert provider.default_options == {"temperature": 0.2}
 
 
 def test_load_connection_providers_keeps_nested_default_options(
@@ -181,6 +179,17 @@ def test_load_connection_providers_reads_inline_api_key_and_defaults(
     assert provider.api_key == "dummy"
     assert provider.allowed_models == []
     assert provider.default_options == {}
+
+
+def test_connection_provider_example_uses_inline_api_key() -> None:
+    # 観点: 接続先サンプルがapi_keyを直接設定する形式であること。
+    # 目的: 環境変数を使わない仕様に沿った設定だけを利用者へ案内する。
+    sample = Path("data/connection_providers.example.json")
+
+    loaded = json.loads(sample.read_text(encoding="utf-8"))
+    providers = loaded["providers"]
+
+    assert all(isinstance(provider.get("api_key"), str) for provider in providers)
 
 
 def test_load_connection_providers_falls_back_when_shape_is_invalid(

@@ -2,7 +2,7 @@ import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from src.presentation.test_support import started_test_client
 
 from src.app import build_app
 from src.config import AppConfig
@@ -20,7 +20,7 @@ class FakeResponder:
 def test_login_form_includes_csrf_token(tmp_path: Path) -> None:
     # 観点: HTML入口でCSRFトークンがフォームへ返却されること。
     # 目的: POST前にブラウザがhidden tokenを取得できる契約を固定する。
-    client = TestClient(build_app(_config(tmp_path), responder=FakeResponder()))
+    client = started_test_client(build_app(_config(tmp_path), responder=FakeResponder()))
 
     response = client.get("/login")
 
@@ -32,7 +32,7 @@ def test_login_form_includes_csrf_token(tmp_path: Path) -> None:
 def test_login_rejects_post_without_csrf_token(tmp_path: Path) -> None:
     # 観点: 明示的に守るPOSTはCSRFトークンなしで拒否されること。
     # 目的: dependencyによる検証がauth routeへ適用されていることを保証する。
-    client = TestClient(build_app(_config(tmp_path), responder=FakeResponder()))
+    client = started_test_client(build_app(_config(tmp_path), responder=FakeResponder()))
     client.get("/login")
 
     response = client.post(
@@ -50,6 +50,7 @@ def _config(tmp_path: Path) -> AppConfig:
         data_dir=tmp_path,
         uploads_dir=tmp_path / "uploads",
         session_secret="test-secret",
+        password_pepper="test-pepper",
     )
 
 

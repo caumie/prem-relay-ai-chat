@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from ...auth_password import hash_password
-from ...infrastructure import AttachmentStorage, AuthRepository, Database
+from ...service.password import hash_password
+from ...infrastructure import AuthRepository, Database
 from ...models import AssistantGenerationConfig, ConnectionProvider, User, UserInputError
+from ..admin_base_assistant import AdminBaseAssistantUsecaseContext
 from ..admin_base_assistant.create_base_assistant import create_base_assistant
-from ..context import UsecaseContext
-from ..test_support import FakeResponseStarter
+from . import AssistantUsecaseContext
 from . import (
     AssistantUsecaseError,
     create_user_assistant,
@@ -31,7 +31,7 @@ def test_list_available_assistants_groups_owned_then_system_then_other_public(
     other = _create_user(database, "other")
 
     standard = create_base_assistant(
-        context,
+        context=_admin_base_context(context),
         actor=admin,
         name="Standard",
         description="shared",
@@ -44,7 +44,7 @@ def test_list_available_assistants_groups_owned_then_system_then_other_public(
         generation_config={"temperature": 0.2},
     )
     other_public = create_user_assistant(
-        context,
+        context=context,
         actor=other,
         base_assistant_id=standard.id,
         name="Other Public",
@@ -53,7 +53,7 @@ def test_list_available_assistants_groups_owned_then_system_then_other_public(
         visibility="public",
     )
     private = create_user_assistant(
-        context,
+        context=context,
         actor=user,
         base_assistant_id=standard.id,
         name="Private",
@@ -62,8 +62,8 @@ def test_list_available_assistants_groups_owned_then_system_then_other_public(
         visibility="private",
     )
 
-    own_available = list_available_assistants(context, user_id=user.id)
-    other_available = list_available_assistants(context, user_id=other.id)
+    own_available = list_available_assistants(context=context, user_id=user.id)
+    other_available = list_available_assistants(context=context, user_id=other.id)
 
     assert [item.id for item in own_available] == [
         private.id,
@@ -93,7 +93,7 @@ def test_resolve_runtime_assistant_merges_provider_and_assistant_config(
     user = _create_user(database, "user")
     admin = _create_user(database, "admin", is_admin=True)
     base = create_base_assistant(
-        context,
+        context=_admin_base_context(context),
         actor=admin,
         name="Base",
         description="shared",
@@ -106,7 +106,7 @@ def test_resolve_runtime_assistant_merges_provider_and_assistant_config(
         generation_config={"reasoning_effort": "medium"},
     )
     created = create_user_assistant(
-        context,
+        context=context,
         actor=user,
         base_assistant_id=base.id,
         name="My Assistant",
@@ -116,7 +116,7 @@ def test_resolve_runtime_assistant_merges_provider_and_assistant_config(
     )
 
     runtime = resolve_runtime_assistant(
-        context,
+        context=context,
         user_id=user.id,
         assistant_id=created.id,
     )
@@ -146,7 +146,7 @@ def test_create_base_assistant_rejects_model_outside_provider_allowed_models(
 
     with pytest.raises(UserInputError):
         create_base_assistant(
-            context,
+            context=_admin_base_context(context),
             actor=_create_user(database, "admin", is_admin=True),
             name="Bad Model",
             description="",
@@ -169,7 +169,7 @@ def test_create_user_assistant_requires_base_assistant(tmp_path: Path) -> None:
 
     with pytest.raises(UserInputError, match="base assistant is required"):
         create_user_assistant(
-            context,
+            context=context,
             actor=user,
             base_assistant_id=None,
             name="No Base",
@@ -187,7 +187,7 @@ def test_create_user_assistant_assigns_owner_and_visibility(tmp_path: Path) -> N
     owner = _create_user(database, "owner")
     admin = _create_user(database, "admin", is_admin=True)
     base = create_base_assistant(
-        context,
+        context=_admin_base_context(context),
         actor=admin,
         name="Base",
         description="shared",
@@ -201,7 +201,7 @@ def test_create_user_assistant_assigns_owner_and_visibility(tmp_path: Path) -> N
     )
 
     created = create_user_assistant(
-        context,
+        context=context,
         actor=owner,
         base_assistant_id=base.id,
         name="  Personal  ",
@@ -226,7 +226,7 @@ def test_update_user_assistant_rejects_non_owner_non_admin(tmp_path: Path) -> No
     other = _create_user(database, "other")
     admin = _create_user(database, "admin", is_admin=True)
     base = create_base_assistant(
-        context,
+        context=_admin_base_context(context),
         actor=admin,
         name="Base",
         description="base",
@@ -239,7 +239,7 @@ def test_update_user_assistant_rejects_non_owner_non_admin(tmp_path: Path) -> No
         generation_config={},
     )
     created = create_user_assistant(
-        context,
+        context=context,
         actor=owner,
         base_assistant_id=base.id,
         name="My Assistant",
@@ -250,7 +250,7 @@ def test_update_user_assistant_rejects_non_owner_non_admin(tmp_path: Path) -> No
 
     with pytest.raises(AssistantUsecaseError):
         update_user_assistant(
-            context,
+            context=context,
             actor=other,
             user_assistant_id=created.id,
             base_assistant_id=base.id,
@@ -269,7 +269,7 @@ def test_update_user_assistant_rewrites_fields_for_owner(tmp_path: Path) -> None
     owner = _create_user(database, "owner")
     admin = _create_user(database, "admin", is_admin=True)
     base = create_base_assistant(
-        context,
+        context=_admin_base_context(context),
         actor=admin,
         name="Base",
         description="base",
@@ -282,7 +282,7 @@ def test_update_user_assistant_rewrites_fields_for_owner(tmp_path: Path) -> None
         generation_config={},
     )
     created = create_user_assistant(
-        context,
+        context=context,
         actor=owner,
         base_assistant_id=base.id,
         name="My Assistant",
@@ -292,7 +292,7 @@ def test_update_user_assistant_rewrites_fields_for_owner(tmp_path: Path) -> None
     )
 
     updated = update_user_assistant(
-        context,
+        context=context,
         actor=owner,
         user_assistant_id=created.id,
         base_assistant_id=base.id,
@@ -318,7 +318,7 @@ def test_delete_user_assistant_hides_deleted_assistant_from_listing(
     owner = _create_user(database, "owner")
     admin = _create_user(database, "admin", is_admin=True)
     base = create_base_assistant(
-        context,
+        context=_admin_base_context(context),
         actor=admin,
         name="Base",
         description="base",
@@ -331,7 +331,7 @@ def test_delete_user_assistant_hides_deleted_assistant_from_listing(
         generation_config={},
     )
     created = create_user_assistant(
-        context,
+        context=context,
         actor=owner,
         base_assistant_id=base.id,
         name="My Assistant",
@@ -341,9 +341,9 @@ def test_delete_user_assistant_hides_deleted_assistant_from_listing(
     )
 
     deleted = delete_user_assistant(
-        context, actor=owner, user_assistant_id=created.id
+        context=context, actor=owner, user_assistant_id=created.id
     )
-    listed = list_manageable_user_assistants(context, owner)
+    listed = list_manageable_user_assistants(owner, context=context)
 
     assert deleted is True
     assert [assistant.id for assistant in listed] == []
@@ -353,20 +353,25 @@ def _context(
     tmp_path: Path,
     *,
     default_options: AssistantGenerationConfig | None = None,
-) -> UsecaseContext:
+) -> AssistantUsecaseContext:
     """assistant ユースケース用のcontextを初期化して返す。"""
     database = Database(tmp_path / "chat.sqlite")
     database.initialize()
-    uploads_dir = tmp_path / "uploads"
-    return UsecaseContext(
+    return AssistantUsecaseContext(
         database=database,
-        password_pepper="pepper",
-        response_service=FakeResponseStarter(),
-        uploads_dir=uploads_dir,
-        attachment_storage=AttachmentStorage(uploads_dir),
         load_connection_providers=lambda: [
             _provider("openai", default_options=default_options or {})
         ],
+    )
+
+
+def _admin_base_context(
+    context: AssistantUsecaseContext,
+) -> AdminBaseAssistantUsecaseContext:
+    """assistantテスト用contextからbase assistant管理に必要な依存だけを返す。"""
+    return AdminBaseAssistantUsecaseContext(
+        database=context.database,
+        load_connection_providers=context.load_connection_providers,
     )
 
 
@@ -374,8 +379,9 @@ def _create_user(
     database: Database, login_name: str, *, is_admin: bool = False
 ) -> User:
     with database.connect() as conn:
-        user = AuthRepository(conn).save(
-            User(id=0, login_name=login_name, is_admin=is_admin),
+        user = AuthRepository(conn).create(
+            login_name=login_name,
+            is_admin=is_admin,
             password_hash=hash_password("password", "pepper"),
         )
         conn.commit()
