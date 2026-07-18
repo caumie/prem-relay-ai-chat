@@ -37,6 +37,8 @@ def build_llm_input(
     Returns:
         OpenAI互換APIへ渡すrole/content辞書の配列。
     """
+    # TODO: 履歴本文・添付の合計byte数と推定token数に上限を設け、
+    # 巨大なbase64化によるメモリ消費と外部API費用を送信前に制御する。
     selected = history[-assistant.max_history_messages :]
     messages: list[LlmMessage] = []
     if assistant.system_prompt:
@@ -109,7 +111,9 @@ def _responses_content(
                 {
                     "type": "input_file",
                     "filename": attachment.original_filename,
-                    "file_data": encoded,
+                    "file_data": (
+                        f"data:{attachment.content_type};base64,{encoded}"
+                    ),
                 }
             )
         elif _is_text_attachment(attachment):

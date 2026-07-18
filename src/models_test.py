@@ -1,9 +1,11 @@
+"""models の入力正規化と既定値の契約を検証する。"""
 
 import pytest
 
 from src.models import (
     MessageRole,
     UserInputError,
+    default_assistant_file_extensions,
     normalize_chat_input,
     normalize_message_content,
 )
@@ -41,3 +43,17 @@ def test_message_role_exposes_llm_role_name() -> None:
     assert MessageRole.USER.to_llm_role() == "user"
     assert MessageRole.ASSISTANT.to_llm_role() == "assistant"
 
+
+def test_default_assistant_file_extensions_follows_allowed_type_definitions() -> None:
+    # 観点: アシスタントの既定値は種別ごとの許可拡張子定義に従うこと。
+    # 目的: 保存層とフォームの既定値が別々に更新される不整合を防ぐ。
+    assert default_assistant_file_extensions() == [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "txt",
+        "md",
+        "pdf",
+    ]

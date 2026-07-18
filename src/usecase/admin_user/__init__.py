@@ -44,6 +44,13 @@ from .get_user import get_user
 from .list_users import list_users
 from .suspend_user import suspend_user
 from .update_user import update_user
+from .errors import (
+    AdminUserError,
+    AdminUserNotFoundError,
+    AdminUserPermissionError,
+    CannotModifyCurrentAdminError,
+    LastActiveAdminError,
+)
 
 __all__ = [
     "AdminUserUsecaseContext",
@@ -54,4 +61,9 @@ __all__ = [
     "list_users",
     "suspend_user",
     "update_user",
+    "AdminUserError",
+    "AdminUserNotFoundError",
+    "AdminUserPermissionError",
+    "CannotModifyCurrentAdminError",
+    "LastActiveAdminError",
 ]

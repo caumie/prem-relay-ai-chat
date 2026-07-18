@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from typing import Any, TypeVar
@@ -58,7 +59,9 @@ class FakeResponseService:
         self.started: list[tuple[int, list[LlmMessage], ResolvedAssistant]] = []
         self.cancelled: list[int] = []
         self.cancel_result = False
+        self.cancel_callback: Callable[[int], None] | None = None
         self.events: list[StreamEvent] = []
+        self.start_error: Exception | None = None
 
     def start_response(
         self,
@@ -68,9 +71,13 @@ class FakeResponseService:
         assistant: ResolvedAssistant,
     ) -> None:
         self.started.append((message_id, messages, assistant))
+        if self.start_error is not None:
+            raise self.start_error
 
     async def cancel_response(self, message_id: int) -> bool:
         self.cancelled.append(message_id)
+        if self.cancel_callback is not None:
+            self.cancel_callback(message_id)
         return self.cancel_result
 
     async def stream_events(self, message: Message) -> AsyncIterator[StreamEvent]:
@@ -109,6 +116,64 @@ def test_create_chat_creates_thread_messages_and_starts_response(
     ]
     assert response_service.started[0][0] == result.assistant_message.id
     assert response_service.started[0][2].id == assistant_id
+
+
+def test_create_chat_marks_placeholder_failed_when_response_start_fails(
+    tmp_path: Path,
+) -> None:
+    # 観点: placeholderのcommit後に応答開始が失敗してもprocessingが残らないこと。
+    # 目的: local Jobなしのprocessingを通常経路で作らず、再接続を孤児回収に使わない。
+    context, user_id, assistant_id, response_service = _context_with_user(tmp_path)
+    response_service.start_error = RuntimeError("start failed")
+
+    with pytest.raises(RuntimeError, match="start failed"):
+        run_async(
+            create_chat(
+                context=context,
+                user_id=user_id,
+                content="hello",
+                assistant_id=assistant_id,
+            )
+        )
+
+    with context.database.connect() as conn:
+        threads = ThreadRepository(conn).list_by_user(user_id)
+        messages = MessageRepository(conn).list_by_thread(threads[0].id)
+    assert messages[-1].role is MessageRole.ASSISTANT
+    assert messages[-1].status is MessageStatus.FAILED
+
+
+def test_add_message_marks_placeholder_failed_when_response_start_fails(
+    tmp_path: Path,
+) -> None:
+    # 観点: 既存threadへの追加でも応答開始失敗後にprocessingを残さないこと。
+    # 目的: 新規chatと追加投稿でpost-commit補償の有無を分岐させない。
+    context, user_id, assistant_id, response_service = _context_with_user(tmp_path)
+    created = run_async(
+        create_chat(
+            context=context,
+            user_id=user_id,
+            content="first",
+            assistant_id=assistant_id,
+        )
+    )
+    response_service.start_error = RuntimeError("start failed")
+
+    with pytest.raises(RuntimeError, match="start failed"):
+        run_async(
+            add_message(
+                context=context,
+                user_id=user_id,
+                thread_id=created.thread.id,
+                content="second",
+                assistant_id=assistant_id,
+            )
+        )
+
+    with context.database.connect() as conn:
+        messages = MessageRepository(conn).list_by_thread(created.thread.id)
+    assert messages[-1].role is MessageRole.ASSISTANT
+    assert messages[-1].status is MessageStatus.FAILED
 
 
 def test_add_message_requires_owned_thread(tmp_path: Path) -> None:
@@ -456,11 +521,57 @@ def test_cancel_response_marks_processing_message_failed_when_no_running_job(
     assert message.status is MessageStatus.FAILED
 
 
+def test_cancel_response_does_not_overwrite_terminal_state_won_during_await(
+    tmp_path: Path,
+) -> None:
+    # 観点: cancelのawait中にcompletedへ確定した応答をfailedで上書きしないこと。
+    # 目的: Jobを持たないworkerの後着cancelも条件付きterminal更新に従わせる。
+    context, user_id, assistant_id, response_service = _context_with_user(tmp_path)
+    created = run_async(
+        create_chat(
+            context=context,
+            user_id=user_id,
+            content="complete while cancelling",
+            assistant_id=assistant_id,
+        )
+    )
+
+    def complete_elsewhere(message_id: int) -> None:
+        with context.database.connect() as conn:
+            repo = MessageRepository(conn)
+            repo.update(
+                replace(
+                    repo.get(message_id),
+                    content="winner",
+                    status=MessageStatus.COMPLETED,
+                    updated_at=utcnow(),
+                )
+            )
+            conn.commit()
+
+    response_service.cancel_callback = complete_elsewhere
+    response_service.cancel_result = False
+
+    run_async(
+        cancel_response(
+            context=context,
+            user_id=user_id,
+            thread_id=created.thread.id,
+            message_id=created.assistant_message.id,
+        )
+    )
+
+    with context.database.connect() as conn:
+        stored = MessageRepository(conn).get(created.assistant_message.id)
+    assert stored.status is MessageStatus.COMPLETED
+    assert stored.content == "winner"
+
+
 def test_stream_response_events_returns_runtime_stream_after_ownership_check(
     tmp_path: Path,
 ) -> None:
-    # 観点: SSE購読は所有者検証と応答開始保証の後にresponse serviceへ委譲すること。
-    # 目的: presentationが応答開始条件やservice直接呼び出しを持たずに済む境界を固定する。
+    # 観点: SSE再接続がprocessing応答の生成を改めて開始しないこと。
+    # 目的: 別processで実行中の応答を重複生成せず、購読だけをserviceへ委譲する。
     context, user_id, assistant_id, response_service = _context_with_user(tmp_path)
     database = context.database
     response_service.events = [
@@ -497,7 +608,7 @@ def test_stream_response_events_returns_runtime_stream_after_ownership_check(
     with database.connect() as conn:
         stored = MessageRepository(conn).get(created.assistant_message.id)
     assert [event.type for event in events] == ["status", "delta", "done"]
-    assert response_service.started[0][0] == created.assistant_message.id
+    assert response_service.started == []
     assert stored.id == created.assistant_message.id
 
 
@@ -554,6 +665,46 @@ def test_save_message_attachments_persists_allowed_upload(tmp_path: Path) -> Non
     assert len(attachments) == 1
     assert stored == attachments[0]
     assert (tmp_path / attachments[0].stored_path).read_bytes() == b"image"
+
+
+def test_save_message_attachments_accepts_ten_files_and_rejects_eleven(
+    tmp_path: Path,
+) -> None:
+    # 観点: 1メッセージには10件まで添付でき、11件目からは拒否すること。
+    # 目的: サーバー側の添付上限を利用者へ提示する上限値と一致させる。
+    context, user_id, assistant_id, _ = _context_with_user(
+        tmp_path,
+        allowed_file_extensions=["txt"],
+    )
+    ten_uploads = [
+        _pending_upload(f"memo-{index}.txt", b"hello", "text/plain")
+        for index in range(10)
+    ]
+
+    attachments = asyncio.run(
+        save_message_attachments(
+            context=context,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            uploads=ten_uploads,
+        )
+    )
+
+    assert len(attachments) == 10
+    with pytest.raises(UserInputError, match=r"too many attachments \(maximum: 10\)"):
+        asyncio.run(
+            save_message_attachments(
+                context=context,
+                user_id=user_id,
+                assistant_id=assistant_id,
+                uploads=[
+                    _pending_upload(
+                        f"extra-{index}.txt", b"hello", "text/plain"
+                    )
+                    for index in range(11)
+                ],
+            )
+        )
 
 
 def test_save_message_attachments_removes_prior_file_when_later_save_fails(

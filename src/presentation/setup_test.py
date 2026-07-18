@@ -2,6 +2,7 @@ import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pytest
 from src.presentation.test_support import started_test_client
 
 from src.app import build_app
@@ -38,7 +39,7 @@ def test_initial_admin_setup_form_is_available_without_admin(
 
 
 def test_initial_admin_setup_creates_admin_and_redirects_to_login(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 観点: 初回管理者作成POSTが管理者を作成しログイン画面へ戻すこと。
     # 目的: routeがフォーム入力をusecaseへ渡すだけで初回セットアップを完了できる契約を固定する。
@@ -68,6 +69,9 @@ def test_initial_admin_setup_creates_admin_and_redirects_to_login(
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
     assert login_response.status_code == 303
+    captured = capsys.readouterr()
+    assert "audit.initial_admin.created" in captured.err
+    assert "ownerpass" not in captured.err
 
 
 def test_initial_admin_setup_is_closed_after_admin_exists(tmp_path: Path) -> None:

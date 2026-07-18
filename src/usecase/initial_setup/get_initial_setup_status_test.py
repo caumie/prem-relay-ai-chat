@@ -52,6 +52,25 @@ def test_create_initial_admin_rejects_when_admin_already_exists(
     assert len(users) == 1
 
 
+def test_setup_stays_closed_when_the_completed_admin_is_no_longer_active(
+    tmp_path: Path,
+) -> None:
+    # 観点: 初期セットアップ完了後に管理者行が停止・削除されても再公開しないこと。
+    # 目的: 管理者件数ではなく一度きりの完了状態で未認証導線を閉じる。
+    context = _context(tmp_path)
+    created = create_initial_admin(
+        login_name="owner",
+        password="ownerpass",
+        context=context,
+    )
+    with context.database.transaction() as conn:
+        conn.execute("delete from active_users where id = ?", (created.id,))
+
+    status = get_initial_setup_status(context=context)
+
+    assert status.can_create_initial_admin is False
+
+
 def _context(tmp_path: Path) -> InitialSetupUsecaseContext:
     """テスト用DBを初期化した初回セットアップcontextを返す。"""
     database = Database(tmp_path / "chat.sqlite")

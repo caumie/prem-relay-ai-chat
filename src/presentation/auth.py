@@ -17,18 +17,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/", response_class=HTMLResponse)
-async def index(request: Request) -> Response:
-    """ログイン状態に応じて/chatか/loginへリダイレクトする"""
-    user_id = request.session.get("user_id")
-    if user_id:
-        logger.info("redirect to /chat", extra=dict(user_id=user_id))
-        return RedirectResponse("/chat", 303)
-    else:
-        logger.info("redirect to /login")
-        return RedirectResponse("/login", 303)
-
-
 @router.get("/login", response_class=HTMLResponse)
 async def login_form(request: Request) -> HTMLResponse:
     """ログインフォームを表示する"""
@@ -48,11 +36,13 @@ async def login(
     password: str = Form(...),
 ) -> Response:
     """ログインフォームの入力でセッションを開始する。"""
-    logger.info("login submit received login_name=%s", login_name)
+    logger.info("login submit received")
+    # TODO: 接続元とログイン名を基準に試行回数を制限し、同期的な
+    # パスワード導出処理はevent loopを塞がない実行境界へ移す。
     user = challenge(login_name=login_name, password=password)
 
     if not user:
-        logger.warning("auth.failed login_name=%s", login_name)
+        logger.warning("auth.failed")
         return presentation_templates().TemplateResponse(
             request,
             "login.html",
@@ -66,7 +56,7 @@ async def login(
 
     request.session["user_id"] = user.id
     rotate_csrf_token(request)
-    logger.info("auth.success user_id=%s login_name=%s", user.id, user.login_name)
+    logger.info("auth.success user_id=%s", user.id)
     return RedirectResponse("/chat", 303)
 
 

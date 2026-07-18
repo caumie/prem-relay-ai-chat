@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import NotRequired, TypedDict
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from src.presentation.test_support import (
     TestApplication,
@@ -32,7 +33,7 @@ from src.infrastructure import (
     utcnow,
 )
 from src.service.response_service import StreamEvent
-from src.usecase.admin_user import AdminUserUsecaseContext, create_user
+from src.usecase.initial_setup import create_initial_admin
 
 
 class FakeResponder:
@@ -182,6 +183,80 @@ def test_chat_route_creates_chat_with_htmx(tmp_path: Path) -> None:
     assert 'hx-swap-oob="afterbegin:#thread-list"' in response.text
     assert f'id="thread-item-{thread_id}"' in response.text
     assert "hello" in response.text
+
+
+def test_chat_route_does_not_log_message_preview_on_create(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 観点: 新規チャット作成時に本文previewがログへ残らないこと。
+    # 目的: チャット本文を運用ログへ二次保管しない契約を固定する。
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
+
+    _login(client)
+    capsys.readouterr()
+    page = client.get("/chat/new")
+    response = client.post(
+        "/chat/new",
+        data={
+            "content": "secret-create-preview",
+            "assistant_id": created["Default"],
+            "_csrf_token": _csrf_token(page.text),
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    captured = capsys.readouterr()
+    assert "secret-create-preview" not in captured.err
+    assert "preview=" not in captured.err
+    assert "assistant_message_id=" in captured.err
+
+
+def test_chat_route_does_not_log_message_preview_on_append(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 観点: 既存スレッドへの投稿時に本文previewがログへ残らないこと。
+    # 目的: 追記投稿でも入力本文をログへ複製しない契約を固定する。
+    test_app = started_test_application(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
+    created = _seed_standard_assistants(test_app, [{"name": "Default"}])
+    client = test_app.client
+
+    _login(client)
+    capsys.readouterr()
+    page = client.get("/chat/new")
+    created_response = client.post(
+        "/chat/new",
+        data={
+            "content": "seed",
+            "assistant_id": created["Default"],
+            "_csrf_token": _csrf_token(page.text),
+        },
+        headers={"HX-Request": "true"},
+    )
+    thread_id = created_response.headers["HX-Push-Url"].removeprefix("/chat/")
+    thread_page = client.get(f"/chat/{thread_id}")
+    capsys.readouterr()
+    response = client.post(
+        f"/chat/{thread_id}/messages",
+        data={
+            "content": "secret-append-preview",
+            "assistant_id": created["Default"],
+            "_csrf_token": _csrf_token(thread_page.text),
+        },
+        headers={"HX-Request": "true"},
+    )
+
+    assert response.status_code == 200
+    captured = capsys.readouterr()
+    assert "secret-append-preview" not in captured.err
+    assert "preview=" not in captured.err
+    assert "assistant_message_id=" in captured.err
 
 
 def test_chat_route_uploads_attachment_when_assistant_allows_it(
@@ -571,15 +646,9 @@ def _seed_standard_assistants(
         auth = AuthRepository(conn)
         admin = auth.get_by_login_name("admin")
     if admin is None:
-        admin = create_user(
+        admin = create_initial_admin(
             login_name="admin",
             password="adminpass",
-            is_admin=True,
-            context=AdminUserUsecaseContext(
-                database=test_app.usecase_runtime.database,
-                password_pepper="test-pepper",
-                attachment_storage=test_app.usecase_runtime.attachment_storage,
-            ),
         )
     with test_app.usecase_runtime.database.connect() as conn:
         created_by_name: dict[str, str] = {}

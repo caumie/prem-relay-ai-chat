@@ -1,5 +1,7 @@
 """初回セットアップ画面のHTML routerを担当する。"""
 
+import logging
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
@@ -11,6 +13,7 @@ from ..usecase.initial_setup import (
 from .context import presentation_templates
 from .util.csrf import ensure_csrf_token, verify_csrf_token
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -61,6 +64,9 @@ async def create_initial_admin_from_form(
     routeはHTTPフォームと表示制御だけを扱い、作成可否や保存形式はusecaseへ委譲する。
     """
     if not login_name.strip() or not password:
+        logger.warning(
+            "audit.initial_admin.denied actor=initial_setup result=denied reason=invalid_input"
+        )
         return presentation_templates().TemplateResponse(
             request,
             "setup_admin.html",
@@ -72,10 +78,17 @@ async def create_initial_admin_from_form(
             status_code=400,
         )
     try:
-        create_initial_admin(
+        user = create_initial_admin(
             login_name=login_name,
             password=password,
         )
     except InitialAdminAlreadyExistsError:
+        logger.info(
+            "audit.initial_admin.denied actor=initial_setup result=denied reason=already_exists"
+        )
         return RedirectResponse("/login", 303)
+    logger.info(
+        "audit.initial_admin.created actor=initial_setup target_user_id=%s result=success",
+        user.id,
+    )
     return RedirectResponse("/login", 303)

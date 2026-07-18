@@ -82,7 +82,13 @@ class TestChallenge:
             is_admin=False,
             context=admin_context,
         )
-        suspend_user(user_id=created.id, context=admin_context)
+        actor = create_user(
+            login_name="admin",
+            password="adminpass",
+            is_admin=True,
+            context=admin_context,
+        )
+        suspend_user(user_id=created.id, actor=actor, context=admin_context)
 
         assert (
             challenge(
@@ -131,7 +137,13 @@ class TestGetCurrentUser:
             is_admin=False,
             context=admin_context,
         )
-        suspend_user(user_id=created.id, context=admin_context)
+        actor = create_user(
+            login_name="admin",
+            password="adminpass",
+            is_admin=True,
+            context=admin_context,
+        )
+        suspend_user(user_id=created.id, actor=actor, context=admin_context)
 
         assert get_current_user(user_id=created.id, context=context) is None
 

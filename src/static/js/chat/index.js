@@ -4,6 +4,9 @@
  * チャット画面の公開入口を一つにまとめ、機能別の mount 関数を調停する。
  * HTMX の差し替え契機を各機能へ漏らさず、各 module は繰り返し mount されても
  * 安全に動く前提で構成する。
+ *
+ * TODO: EventSourceの完了・失敗・再接続とHTMX差し替え後の再mountを、
+ * ブラウザ上の自動テストで検証する。
  */
 
 import { mountClipboard } from "./clipboard.js";

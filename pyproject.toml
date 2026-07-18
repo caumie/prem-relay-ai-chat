@@ -1,6 +1,6 @@
 [project]
 name = "prem-relay-ai-chat"
-version = "0.1.0"
+version = "0.1.2"
 description = "Chat with AI using OpenAI GPT models with SSE streaming"
 readme = "README.md"
 requires-python = ">=3.13"

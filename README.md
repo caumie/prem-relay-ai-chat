@@ -217,7 +217,10 @@ docker compose down
 
 Assistant Message の Placeholder を SQLite へ保存してから応答生成を開始します。ブラウザとの SSE 接続が切れても、HTTP 接続と生成処理を同じ寿命として扱いません。
 
-生成中の Job はオンメモリで管理し、完了・失敗・停止時に DB 上の状態を収束させます。SSE 再接続時には保存済みの最新全文を返した後、以降の差分を配信します。
+生成中の Job はオンメモリで管理し、完了・失敗・停止時に DB 上の状態を収束させます。
+SSE は最新全文の snapshot を配信し、一時切断時はブラウザ標準の EventSource
+再接続で復帰します。local Jobがない場合もserver内ではpollingせず、短いSSEを終了して
+ブラウザへ再確認を委ねます。
 
 主な実装:
 
@@ -290,6 +293,22 @@ uv run pyright
 ## 現在の制約
 
 本プロジェクトは、小規模な単一サーバー運用へ範囲を絞っています。
+
+Uvicornは1 workerを正式サポート範囲とします。`--workers 2`以上でも、生成workerが
+共有DBへterminal結果を保存できれば、別workerはブラウザのEventSource再接続時に
+その最終結果を復元できます。ただし、これは最終結果観測だけのbest-effort動作です。
+
+生成JobとProvider Taskはworkerごとのメモリにあり、worker間では共有されません。
+non-owner workerへSSEが届いた場合、serverはDBを1回確認して`waiting`を返し、ブラウザの
+標準再接続へ制御を戻します。独自の0.5秒pollingは行いません。non-owner workerへcancelが
+届くとDBをfailedへできますが、owner workerのProvider Taskそのものは停止できません。
+
+途中表示、process横断cancel、全worker共通capacity、timeout、graceful shutdown、
+owner異常終了後の回収、worker追加・rolling restartは保証しません。特に起動時の
+全processing一括回収は、別workerが生成中の応答もfailedにし得ます。詳細な場面別動作と
+コード・テストの対応は
+[`応答ジョブライフサイクル再設計`](docs/tdd/2026-07-15_response_job_lifecycle_task.md#複数workerを指定した時の実動作)
+を参照してください。
 
 - 公開サインアップはありません。
 - 大規模組織向けの細かな権限ロールはありません。

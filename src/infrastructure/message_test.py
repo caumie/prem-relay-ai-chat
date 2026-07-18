@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from src.service.password import hash_password
 from src.models import Message, MessageKind, MessageRole, MessageStatus, Thread, User
 from src.infrastructure import (
@@ -99,6 +100,98 @@ def test_message_repository_marks_processing_assistant_messages_failed(
     assert changed == 1
     assert loaded[processing.id].status is MessageStatus.FAILED
     assert loaded[completed.id].status is MessageStatus.COMPLETED
+
+
+def test_message_repository_updates_processing_message_to_terminal_once(
+    tmp_path: Path,
+) -> None:
+    # 観点: processing messageだけをterminalへ条件付き更新できること。
+    # 目的: 応答完了とcancelが競合しても後着の結果でDBを上書きしない。
+    database = Database(tmp_path / "chat.sqlite")
+    database.initialize()
+
+    with database.connect() as conn:
+        user = save_user(conn, "pepper", "admin", "adminpass")
+        thread = save_thread(conn, user.id, "title")
+        repo = MessageRepository(conn)
+        processing = save_assistant_placeholder(conn, thread.id, "default")
+        first = replace(
+            processing,
+            content="partial",
+            status=MessageStatus.FAILED,
+            kinds=[MessageKind(kind="reasoning", content="thinking")],
+            updated_at=utcnow(),
+        )
+        second = replace(
+            processing,
+            content="complete",
+            status=MessageStatus.COMPLETED,
+            updated_at=utcnow(),
+        )
+
+        changed = repo.update_processing_to_terminal(first)
+        existing = repo.update_processing_to_terminal(second)
+        loaded = repo.get(processing.id)
+        conn.commit()
+
+    assert changed is not None
+    assert existing is not None
+    assert existing.status is MessageStatus.FAILED
+    assert existing.content == "partial"
+    assert loaded.status is MessageStatus.FAILED
+    assert loaded.content == "partial"
+    assert [kind.kind for kind in loaded.kinds] == ["text", "reasoning"]
+
+
+def test_message_repository_terminal_update_returns_none_for_missing_message(
+    tmp_path: Path,
+) -> None:
+    # 観点: 対象messageが消えた場合に条件付き更新が冪等なNoneになること。
+    # 目的: 応答Taskの失敗処理が元例外を上書きせず対象なしへ収束する。
+    database = Database(tmp_path / "chat.sqlite")
+    database.initialize()
+
+    with database.connect() as conn:
+        missing = Message(
+            id=999,
+            thread_id="missing",
+            role=MessageRole.ASSISTANT,
+            content="answer",
+            status=MessageStatus.COMPLETED,
+            assistant_id="default",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+
+        changed = MessageRepository(conn).update_processing_to_terminal(missing)
+
+    assert changed is None
+
+
+@pytest.mark.parametrize("status", [MessageStatus.PROCESSING])
+def test_message_repository_rejects_non_terminal_status_for_conditional_update(
+    tmp_path: Path,
+    status: MessageStatus,
+) -> None:
+    # 観点: 条件付き終端更新へprocessingを渡せないこと。
+    # 目的: Repository境界で状態遷移の向きを固定し、呼出し側の実装ミスを検知する。
+    database = Database(tmp_path / "chat.sqlite")
+    database.initialize()
+
+    with database.connect() as conn:
+        message = Message(
+            id=999,
+            thread_id="missing",
+            role=MessageRole.ASSISTANT,
+            content="answer",
+            status=status,
+            assistant_id="default",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+
+        with pytest.raises(ValueError, match="terminal"):
+            MessageRepository(conn).update_processing_to_terminal(message)
 
 
 def save_user(

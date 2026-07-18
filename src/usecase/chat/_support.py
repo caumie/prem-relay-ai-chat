@@ -1,7 +1,7 @@
 """chat ユースケース間で共有する補助処理を定義する。"""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from ...infrastructure import (
@@ -76,34 +76,65 @@ def start_response(
     assistant_message: Message,
     history: list[Message],
 ) -> None:
-    """assistant placeholder に対応する応答生成を開始する。"""
-    attachment_ids = [
-        kind.content
-        for message in history
-        for kind in message.kinds
-        if kind.kind == "file"
-    ]
-    with context.database.connect() as conn:
-        assistant = resolve_runtime_assistant(
-            user_id=user_id,
-            assistant_id=assistant_message.assistant_id or "",
-            context=_assistant_context(context),
-        )
-        attachments = AttachmentRepository(conn).list_by_ids_for_user(
-            attachment_ids=attachment_ids,
-            user_id=user_id,
-        )
-    attachments_by_id = {attachment.id: attachment for attachment in attachments}
-    context.response_service.start_response(
-        message_id=assistant_message.id,
-        messages=build_llm_input(
-            context.uploads_dir,
-            history=history,
-            attachments_by_id=attachments_by_id,
+    """assistant placeholderの応答を開始し、開始失敗時はfailedへ収束する。
+
+    Args:
+        context: チャット操作と応答開始に使う依存。
+        user_id: 応答を開始するユーザーID。
+        assistant_message: commit済みのassistant placeholder。
+        history: Provider入力へ変換するmessage履歴。
+
+    Returns:
+        None。
+
+    placeholderはこの関数より前にcommit済みである。入力構築やJob登録が失敗しても
+    `processing`だけを残さず、ユーザーが再送・削除できるterminal状態へ変換する。
+    SSE GETは生成開始点にしないため、通常リクエスト内ではここで即時回収する。
+    """
+    try:
+        attachment_ids = [
+            kind.content
+            for message in history
+            for kind in message.kinds
+            if kind.kind == "file"
+        ]
+        with context.database.connect() as conn:
+            assistant = resolve_runtime_assistant(
+                user_id=user_id,
+                assistant_id=assistant_message.assistant_id or "",
+                context=_assistant_context(context),
+            )
+            attachments = AttachmentRepository(conn).list_by_ids_for_user(
+                attachment_ids=attachment_ids,
+                user_id=user_id,
+            )
+        attachments_by_id = {attachment.id: attachment for attachment in attachments}
+        context.response_service.start_response(
+            message_id=assistant_message.id,
+            messages=build_llm_input(
+                context.uploads_dir,
+                history=history,
+                attachments_by_id=attachments_by_id,
+                assistant=assistant,
+            ),
             assistant=assistant,
-        ),
-        assistant=assistant,
-    )
+        )
+    except Exception:
+        # commit済みplaceholderの補償は元transactionへ戻れないため、
+        # 新しいconnectionから条件付きでfailedへ収束させる。既にcancel等が
+        # terminalへ確定していればRepositoryがその勝者を維持する。
+        with context.database.connect() as conn:
+            repo = MessageRepository(conn)
+            current = repo.get(assistant_message.id)
+            repo.update_processing_to_terminal(
+                replace(
+                    current,
+                    status=MessageStatus.FAILED,
+                    updated_at=utcnow(),
+                )
+            )
+            conn.commit()
+        raise
 
 
 def file_kinds(attachments: list[Attachment]) -> list[MessageKind] | None:

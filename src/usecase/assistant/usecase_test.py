@@ -131,7 +131,16 @@ def test_resolve_runtime_assistant_merges_provider_and_assistant_config(
         "api_key": "secret",
         "model": "gpt-5",
         "allow_file_upload": True,
-        "allowed_file_extensions": ["jpg", "jpeg", "png"],
+        "allowed_file_extensions": [
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "webp",
+            "txt",
+            "md",
+            "pdf",
+        ],
         "reasoning_effort": "medium",
     }
 

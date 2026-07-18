@@ -222,7 +222,12 @@ AssistantConfigValue: TypeAlias = (
 AssistantGenerationConfig: TypeAlias = dict[str, AssistantConfigValue]
 LlmContentPart: TypeAlias = dict[str, object]
 LlmMessage: TypeAlias = dict[str, str | list[LlmContentPart]]
-DEFAULT_ASSISTANT_FILE_EXTENSIONS = ["jpg", "jpeg", "png"]
+AllowedFileExtensions: TypeAlias = dict[str, list[str]]
+DEFAULT_ALLOWED_FILE_EXTENSIONS: AllowedFileExtensions = {
+    "image": ["png", "jpg", "jpeg", "gif", "webp"],
+    "text": ["txt", "md"],
+    "pdf": ["pdf"],
+}
 
 
 def default_assistant_file_extensions() -> list[str]:
@@ -233,7 +238,11 @@ def default_assistant_file_extensions() -> list[str]:
 
     dataclass の可変既定値を共有しないため、default_factory として使う。
     """
-    return list(DEFAULT_ASSISTANT_FILE_EXTENSIONS)
+    return [
+        extension
+        for extensions in DEFAULT_ALLOWED_FILE_EXTENSIONS.values()
+        for extension in extensions
+    ]
 
 
 def normalize_file_extensions(extensions: list[str]) -> list[str]:

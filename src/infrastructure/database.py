@@ -20,14 +20,23 @@ class Database:
 
     def initialize(self) -> None:
         """引数なし・戻り値なしで、DBファイル親ディレクトリ作成とスキーマ適用を行う。"""
-        logger.debug("db.ensure path=%s", self.db_path)
+        # TODO: create-if-not-existsでは反映できないスキーマ変更に備え、
+        # schema versionと一方向migrationの適用手順を導入する。
+        logger.debug("db.initialize.start path=%s", self.db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.executescript(SCHEMA_SQL_PATH.read_text(encoding="utf-8"))
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.executescript(SCHEMA_SQL_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            logger.error("db.initialize.failed path=%s", self.db_path)
+            raise
+        logger.debug("db.initialize.done path=%s", self.db_path)
 
     @contextmanager
     def connect(self) -> Generator[sqlite3.Connection]:
         """引数なしでSQLite接続を生成し、利用後に必ず閉じるcontext managerを返す。"""
+        # TODO: 想定する同時アクセス量を計測し、busy_timeoutとWALの採否を決めて
+        # 一時的なwrite競合を即時のリクエスト失敗にしない接続方針を固定する。
         conn = sqlite3.connect(self.db_path)
         conn.execute("pragma foreign_keys = on")
         conn.row_factory = sqlite3.Row
@@ -35,3 +44,16 @@ class Database:
             yield conn
         finally:
             conn.close()
+
+    @contextmanager
+    def transaction(self) -> Generator[sqlite3.Connection]:
+        """BEGIN IMMEDIATEからcommitまたはrollbackまでを管理する。"""
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield conn
+            except Exception:
+                conn.rollback()
+                raise
+            else:
+                conn.commit()

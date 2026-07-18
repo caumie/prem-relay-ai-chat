@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from src.presentation.test_support import (
@@ -58,7 +59,7 @@ def test_admin_user_assistants_index_shows_creator_and_missing_base(
 
 
 def test_admin_user_assistant_create_route_redirects_and_lists_assistant(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 観点: 管理者のUserAssistant作成POSTがフォーム入力を受け取り一覧へ戻ること。
     # 目的: admin user assistant作成のHTTP入口配線を固定する。
@@ -84,10 +85,12 @@ def test_admin_user_assistant_create_route_redirects_and_lists_assistant(
 
     assert response.status_code == 303
     assert "Managed" in listed.text
+    captured = capsys.readouterr()
+    assert "audit.admin_user_assistant.created" in captured.err
 
 
 def test_admin_user_assistant_update_route_redirects_and_lists_changes(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 観点: 管理者のUserAssistant編集POSTが対象を更新して一覧へ戻ること。
     # 目的: admin user assistant更新のHTTP入口配線を固定する。
@@ -119,10 +122,12 @@ def test_admin_user_assistant_update_route_redirects_and_lists_changes(
 
     assert response.status_code == 303
     assert "Managed Updated" in listed.text
+    captured = capsys.readouterr()
+    assert "audit.admin_user_assistant.updated" in captured.err
 
 
 def test_admin_user_assistant_delete_route_redirects_and_hides_assistant(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 観点: 管理者のUserAssistant削除POSTが対象を一覧から隠すこと。
     # 目的: admin user assistant削除のHTTP入口配線を固定する。
@@ -147,6 +152,8 @@ def test_admin_user_assistant_delete_route_redirects_and_hides_assistant(
 
     assert response.status_code == 303
     assert "Managed" not in after_delete.text
+    captured = capsys.readouterr()
+    assert "audit.admin_user_assistant.deleted" in captured.err
 
 
 def _config(tmp_path: Path) -> AppConfig:

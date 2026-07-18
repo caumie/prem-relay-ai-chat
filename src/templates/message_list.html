@@ -1,3 +1,4 @@
+{# チャットメッセージ一覧の配置と表示状態に応じた装飾を担う。 #}
 <div id="messages" class="messageList">
     {% include "message_items.html" %}
     <style>
@@ -51,8 +52,25 @@
         color: var(--text-message-user);
     }
 
-    .streaming .messageBubble {
-        opacity: .75;
+    .streaming .messageBubble[data-chat-raw-content=""] {
+        animation: waitingPulse 2.4s ease-in-out infinite;
+    }
+
+    @keyframes waitingPulse {
+        0%, 100% {
+            opacity: .45;
+        }
+
+        50% {
+            opacity: 1;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .streaming .messageBubble[data-chat-raw-content=""] {
+            animation: none;
+            opacity: .75;
+        }
     }
 
     .messageReasoning {

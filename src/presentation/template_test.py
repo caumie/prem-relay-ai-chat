@@ -1,3 +1,5 @@
+"""テンプレートが所有する固定表示・操作契約を検証するテスト。"""
+
 from pathlib import Path
 import re
 
@@ -13,6 +15,17 @@ def test_login_template_owns_fixed_form_labels() -> None:
     assert 'placeholder="User ID"' in source
     assert 'placeholder="Password"' in source
     assert ">Login</button>" in source
+
+
+def test_initial_setup_template_is_distinct_from_login_template() -> None:
+    # 観点: 初期管理者作成画面が初回専用であることを視覚・文言で強調すること。
+    # 目的: ログイン画面と同じフォームに見えて操作を誤る状態を避ける。
+    source = _template("setup_admin.html")
+
+    assert 'class="setupBadge"' in source
+    assert ">First-time setup</div>" in source
+    assert "This setup is available only once." in source
+    assert "border-top: 4px solid var(--accent);" in source
 
 
 def test_chat_form_template_owns_composer_contract() -> None:
@@ -47,6 +60,51 @@ def test_chat_form_script_rejects_disallowed_files_and_supports_drop() -> None:
     assert 'addEventListener("drop"' in source
     assert 'addEventListener("dragover"' in source
     assert 'addEventListener("paste"' in source
+
+
+def test_chat_form_limits_attachments_and_shows_the_limit() -> None:
+    # 観点: 11件以上を追加したとき、10件に制限して理由を画面へ表示すること。
+    # 目的: サーバーの400だけで失敗し、送信が反映されないように見える状態を防ぐ。
+    template = _template("chat_form.html")
+    source = Path("src/static/js/chat/form.js").read_text(encoding="utf-8")
+
+    assert 'data-chat-file-limit="10"' in template
+    assert "data-chat-attachment-notice" in template
+    assert 'role="alert"' in template
+    assert "attachmentLimit" in source
+    assert "allowedFiles.slice(0, availableSlots)" in source
+    assert "Up to ${attachmentLimit} files can be attached." in source
+
+
+def test_chat_stream_script_keeps_event_source_for_browser_reconnect() -> None:
+    # 観点: 一時切断やlocal Jobを持たないworkerのSSE終了時に明示closeしないこと。
+    # 目的: local Jobなしの再確認をserver pollingではなくブラウザ標準再接続へ委ねる。
+    source = Path("src/static/js/chat/stream.js").read_text(encoding="utf-8")
+
+    assert "source.readyState === EventSource.CLOSED" in source
+    assert 'if (patch.error)' in source
+    assert 'if (patch.done)' in source
+
+
+def test_chat_form_tracks_processing_streams_by_message_id() -> None:
+    # 観点: 初期processing表示とstream-startを同じmessageとして数えること。
+    # 目的: 初期値と開始eventの二重加算で応答完了後も送信不能になる状態を防ぐ。
+    source = Path("src/static/js/chat/form.js").read_text(encoding="utf-8")
+
+    assert "new Set(" in source
+    assert "activeProcessingMessageIds.add(messageId)" in source
+    assert "activeProcessingMessageIds.delete(messageId)" in source
+
+
+def test_message_list_slowly_pulses_only_while_waiting_for_response() -> None:
+    # 観点: AI応答の本文が届く前だけ、待機表示が緩やかに明滅すること。
+    # 目的: 生成済み本文の可読性を損なわず、応答待ちであることを視覚的に伝える。
+    source = _template("message_list.html")
+
+    assert '.streaming .messageBubble[data-chat-raw-content=""]' in source
+    assert "animation: waitingPulse 2.4s ease-in-out infinite;" in source
+    assert "@keyframes waitingPulse" in source
+    assert "@media (prefers-reduced-motion: reduce)" in source
 
 
 def test_chat_form_template_groups_assistant_options() -> None:
@@ -135,7 +193,7 @@ def test_base_assistant_form_template_uses_single_line_extension_input() -> None
     assert (
         '<input class="inputField" id="allowed_file_extensions" '
         'name="allowed_file_extensions" value="{{ allowed_file_extensions_text }}" '
-        'placeholder="jpg, jpeg, png">'
+        'placeholder="png, jpg, jpeg, gif, webp, txt, md, pdf">'
     ) in source
     assert 'textarea class="inputField assistantExtensionArea"' not in source
 
@@ -152,6 +210,52 @@ def test_sidebar_template_owns_account_and_logout_display_contract() -> None:
     assert 'title="Logout"' in source
     assert 'aria-label="Logout"' in source
     assert "<span>Logout</span>" not in source
+
+
+def test_sidebar_includes_theme_switch_component() -> None:
+    # 観点: サイドバーはテーマ切り替えの詳細を持たず専用テンプレートへ委譲すること。
+    # 目的: テーマ切り替えのDOM・CSS・JSを一つのコンポーネントに閉じ込める。
+    source = _template("sidebar.html")
+
+    assert '{% include "theme_switch.html" %}' in source
+    assert "sidebarThemeControl" not in source
+    assert "data-theme-toggle" not in source
+
+
+def test_theme_switch_template_owns_markup_style_and_behavior() -> None:
+    # 観点: theme switchテンプレートだけで表示・装飾・横並び表示・切り替え処理が完結すること。
+    # 目的: 利用箇所を増やしても関連実装が複数ファイルへ分散しないようにする。
+    source = _template("theme_switch.html")
+
+    assert "<style>" in source
+    assert "@scope {" in source
+    assert "<script>" in source
+    assert "sidebarThemeControl" in source
+    assert "width: 100%;" in source
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in source
+    assert ":scope {" in source
+    assert ".sidebarThemeButton {" in source
+    assert 'data-theme-value="light"' in source
+    assert 'data-theme-value="dark"' in source
+    assert 'aria-pressed="true"' in source
+    assert 'aria-pressed="false"' in source
+    assert "fa-sun" in source
+    assert "fa-moon" in source
+    assert "chat.theme" in source
+    assert "document.documentElement.dataset.theme" in source
+    assert "window.localStorage.getItem" in source
+    assert "window.localStorage.setItem" in source
+    assert "try {" in source
+
+
+def test_app_script_does_not_own_theme_switch_behavior() -> None:
+    # 観点: 共通app scriptがtheme switch固有の処理を持たないこと。
+    # 目的: コンポーネント分離後に二重イベント登録や初期化順依存を残さない。
+    source = Path("src/static/js/app.js").read_text(encoding="utf-8")
+
+    assert "mountThemeToggle" not in source
+    assert "chat.theme" not in source
+    assert "data-theme-toggle" not in source
 
 
 def _template(name: str) -> str:

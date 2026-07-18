@@ -1,5 +1,6 @@
 """admin 向け UserAssistant 管理画面の HTML router を担当する。"""
 
+import logging
 from collections.abc import Sequence
 from typing import TypedDict
 
@@ -23,6 +24,7 @@ from ..context import current_admin, presentation_templates, shell_context
 from ..util.csrf import verify_csrf_token
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -82,12 +84,18 @@ async def admin_user_assistant_create(
     admin: User = Depends(current_admin),
 ) -> Response:
     try:
-        create_user_assistant(
+        assistant = create_user_assistant(
             actor=admin,
             **await _user_assistant_form_payload(request),
         )
     except UserInputError as exc:
         raise HTTPException(400, str(exc)) from exc
+    logger.info(
+        "audit.admin_user_assistant.created actor_user_id=%s target_user_id=%s resource_id=%s result=success",
+        admin.id,
+        assistant.owner_user_id,
+        assistant.id,
+    )
     return RedirectResponse("/admin/user-assistants", 303)
 
 
@@ -125,7 +133,7 @@ async def admin_user_assistant_update(
     admin: User = Depends(current_admin),
 ) -> Response:
     try:
-        update_user_assistant(
+        assistant = update_user_assistant(
             actor=admin,
             user_assistant_id=assistant_id,
             **await _user_assistant_form_payload(request),
@@ -134,6 +142,12 @@ async def admin_user_assistant_update(
         raise HTTPException(400, str(exc)) from exc
     except AssistantUsecaseError as exc:
         raise HTTPException(404, str(exc)) from exc
+    logger.info(
+        "audit.admin_user_assistant.updated actor_user_id=%s target_user_id=%s resource_id=%s result=success",
+        admin.id,
+        assistant.owner_user_id,
+        assistant.id,
+    )
     return RedirectResponse("/admin/user-assistants", 303)
 
 
@@ -144,12 +158,23 @@ async def admin_user_assistant_delete(
     admin: User = Depends(current_admin),
 ) -> Response:
     try:
-        delete_user_assistant(
+        assistant = get_manageable_user_assistant(
             actor=admin,
             user_assistant_id=assistant_id,
         )
     except AssistantUsecaseError as exc:
         raise HTTPException(404, str(exc)) from exc
+    deleted = delete_user_assistant(
+        actor=admin,
+        user_assistant_id=assistant_id,
+    )
+    if deleted:
+        logger.info(
+            "audit.admin_user_assistant.deleted actor_user_id=%s target_user_id=%s resource_id=%s result=success",
+            admin.id,
+            assistant.owner_user_id,
+            assistant.id,
+        )
     return RedirectResponse("/admin/user-assistants", 303)
 
 

@@ -33,5 +33,5 @@ def get_initial_setup_status(
     """
     ctx = context if context is not None else initial_setup_usecase_context()
     with ctx.database.connect() as conn:
-        has_admin = AuthRepository(conn).has_admin_user()
-    return InitialSetupStatus(can_create_initial_admin=not has_admin)
+        completed = AuthRepository(conn).is_initial_setup_completed()
+    return InitialSetupStatus(can_create_initial_admin=not completed)

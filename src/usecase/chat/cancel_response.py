@@ -22,6 +22,7 @@ async def cancel_response(
         user_id: 操作ユーザーID。
         thread_id: 対象Thread ID。
         message_id: 対象assistant message ID。
+        context: chat usecaseの実行依存。省略時は初期化済みruntimeから取得する。
 
     Returns:
         None。
@@ -47,9 +48,15 @@ async def cancel_response(
             or message.status is not MessageStatus.PROCESSING
         ):
             raise ChatUsecaseError("message not processing")
-        cancelled = await ctx.response_service.cancel_response(message_id)
-        if not cancelled:
-            repo.update(
+    # process-local Jobのcancelはawaitを伴う。待機中に別処理がterminalへ
+    # 確定できるよう、DB connectionと古いtransactionを保持しない。
+    cancelled = await ctx.response_service.cancel_response(message_id)
+    if not cancelled:
+        # 非owner workerではProvider Task自体は止められない。新しいconnectionから
+        # processingだけをfailedへ更新し、ownerの後着完了による上書きと、
+        # await中に確定したterminalへの上書きを防ぐ。
+        with ctx.database.connect() as conn:
+            MessageRepository(conn).update_processing_to_terminal(
                 replace(
                     message,
                     status=MessageStatus.FAILED,

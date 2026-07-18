@@ -1,4 +1,5 @@
 
+import logging
 import json
 from pathlib import Path
 
@@ -119,6 +120,20 @@ def test_load_connection_providers_returns_default_when_file_is_missing(
     providers = load_connection_providers(tmp_path)
 
     assert providers == [default_connection_provider()]
+
+
+def test_load_connection_providers_logs_default_fallback_when_file_is_missing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # 観点: connection_providers.json がない場合に理由付きで既定Providerへ倒れること。
+    # 目的: 設定欠落時の動作をログから切り分けられるようにする。
+    caplog.set_level(logging.WARNING, logger="src.config")
+
+    providers = load_connection_providers(tmp_path)
+
+    assert providers == [default_connection_provider()]
+    assert "providers.load missing" in caplog.text
+    assert "reason=file_missing" in caplog.text
 
 
 def test_load_connection_providers_keeps_nested_default_options(

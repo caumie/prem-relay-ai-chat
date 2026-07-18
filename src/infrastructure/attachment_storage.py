@@ -11,16 +11,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from ..models import PendingUpload, UserInputError, normalize_file_extensions
+from ..models import (
+    DEFAULT_ALLOWED_FILE_EXTENSIONS,
+    AllowedFileExtensions,
+    PendingUpload,
+    UserInputError,
+    normalize_file_extensions,
+)
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
-MAX_ATTACHMENTS_PER_MESSAGE = 5
-AllowedFileExtensions = dict[str, list[str]]
-DEFAULT_ALLOWED_FILE_EXTENSIONS: AllowedFileExtensions = {
-    "image": ["png", "jpg", "jpeg", "gif", "webp"],
-    "text": ["txt", "md"],
-    "pdf": ["pdf"],
-}
+MAX_ATTACHMENTS_PER_MESSAGE = 10
 
 
 @dataclass(frozen=True)
@@ -96,6 +96,8 @@ class AttachmentStorage:
 
         digest = hashlib.sha256()
         size = 0
+        # TODO: 書き込み・closeのどちらが失敗しても未完了ファイルを削除し、
+        # uploadを必ずcloseするよう、保存処理全体をtry/finallyで囲む。
         with destination.open("wb") as fp:
             while chunk := await upload.read(1024 * 1024):
                 size += len(chunk)
@@ -112,6 +114,8 @@ class AttachmentStorage:
         return UploadedAttachment(
             original_filename=filename,
             stored_path=relative_path.as_posix(),
+            # TODO: クライアント申告値ではなく、許可拡張子とファイルシグネチャから
+            # サーバー側で確定したMIME typeを保存する。
             content_type=upload.content_type or "application/octet-stream",
             size_bytes=size,
             sha256=digest.hexdigest(),

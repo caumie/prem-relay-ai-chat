@@ -37,6 +37,8 @@ def fail_processing_assistant_messages(
 
     再起動で処理継続できない assistant message を failed に落とし、
     ユーザーが再送や削除で回復できる状態にする。
+    Job所有権をDBに持たないため、正式サポートする単一worker起動時だけ行う。
+    複数worker起動では、別processが生成中のmessageも対象になり得る。
     """
     ctx = context if context is not None else initial_setup_usecase_context()
     with ctx.database.connect() as conn:

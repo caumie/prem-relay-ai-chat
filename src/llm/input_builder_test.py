@@ -79,7 +79,7 @@ def test_llm_input_builder_sends_responses_pdf_by_mime_type(
     assert isinstance(content, list)
     assert content[1]["type"] == "input_file"
     assert content[1]["filename"] == "report.pdf"
-    assert content[1]["file_data"]
+    assert content[1]["file_data"] == "data:application/pdf;base64,JVBERi0xLjc="
 
 
 def test_llm_input_builder_sends_text_attachment_content(

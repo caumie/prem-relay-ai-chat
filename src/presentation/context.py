@@ -45,7 +45,12 @@ async def current_user(request: Request) -> User:
     user_id = request.session.get("user_id")
     user = get_current_user(user_id=user_id) if isinstance(user_id, int) else None
     if user is None:
-        logger.warning("auth.required path=%s", request.url.path)
+        logger.warning(
+            "auth.required path=%s method=%s request_type=%s",
+            request.url.path,
+            request.method,
+            _request_type(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER,
             headers={"Location": "/login"},
@@ -88,3 +93,12 @@ def shell_context(request: Request, user: User) -> dict[str, object]:
         "threads": page.threads if page is not None else [],
         "csrf_token": ensure_csrf_token(request),
     }
+
+
+def _request_type(request: Request) -> str:
+    """HTTP request の種別をざっくり分類する。"""
+    if request.headers.get("HX-Request") == "true":
+        return "htmx"
+    if "text/event-stream" in request.headers.get("accept", ""):
+        return "sse"
+    return "html"

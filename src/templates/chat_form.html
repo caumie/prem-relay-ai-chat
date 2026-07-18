@@ -1,9 +1,10 @@
+{# JS起動前はserver状態で送信を止め、mount後はmessage IDのSetへ引き継ぐ。 #}
 <form class="chatInputForm" method="post" enctype="multipart/form-data" data-chat-form
     action="{% if thread %}/chat/{{ thread.id }}/messages{% else %}/chat/new{% endif %}"
     hx-post="{% if thread %}/chat/{{ thread.id }}/messages{% else %}/chat/new{% endif %}"
     hx-target="{% if thread %}#messages{% else %}#chat-main{% endif %}"
     hx-swap="{% if thread %}beforeend{% else %}outerHTML{% endif %}" data-chat-submit-debounce-ms="400"
-    data-chat-processing="{{ 'true' if has_processing_message else 'false' }}">
+    data-chat-processing="{{ 'true' if has_processing_message else 'false' }}" data-chat-file-limit="10">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <div class="modelSelectRow">
         <select id="assistant_id" name="assistant_id" class="selectField modelSelectInput" required>
@@ -32,6 +33,7 @@
             <span data-chat-drop-extensions>{{ selected_file_accept }}</span>
         </div>
         <div class="attachmentList" data-chat-attachment-list hidden></div>
+        <p class="attachmentNotice" data-chat-attachment-notice role="alert" hidden></p>
         <div class="chatInputRow">
             <label class="attachmentButton" data-chat-file-label>
                 <i class="fas fa-paperclip" aria-hidden="true"></i>
@@ -108,6 +110,16 @@
     }
 
     .attachmentList[hidden] {
+        display: none;
+    }
+
+    .attachmentNotice {
+        margin: 0;
+        color: var(--danger, #c33);
+        font-size: .875rem;
+    }
+
+    .attachmentNotice[hidden] {
         display: none;
     }
 

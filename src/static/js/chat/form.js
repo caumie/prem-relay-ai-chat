@@ -3,7 +3,7 @@
  *
  * 永続化はサーバー、差し替えは HTMX が担うため、この module はブラウザ側の操作性に
  * 限って責務を持つ。具体的には textarea の高さ調整、キーボード送信、
- * 二重送信防止、添付プレビューの表示と削除を扱う。
+ * 二重送信防止、SSE処理中状態との同期、添付プレビューの表示と削除を扱う。
  */
 
 import { scrollChatToBottom } from "./scroll.js";
@@ -27,10 +27,22 @@ export function mountChatForm(root) {
   const fileInput = form.querySelector("[data-chat-file-input]");
   const fileLabel = form.querySelector("[data-chat-file-label]");
   const fileList = form.querySelector("[data-chat-attachment-list]");
+  const attachmentNotice = form.querySelector("[data-chat-attachment-notice]");
+  const attachmentLimit = Number.parseInt(form.dataset.chatFileLimit || "10", 10);
   const dropExtensions = form.querySelector("[data-chat-drop-extensions]");
   const previewUrls = [];
   let selectedFiles = fileInput ? Array.from(fileInput.files || []) : [];
-  let activeProcessingCount = form.dataset.chatProcessing === "true" ? 1 : 0;
+  // mountChatFormはmountStreamsより先に動く。初期DOMと直後のstream-startが
+  // 同じmessageを示すため、IDのSetで二重加算と再mount時の重複を防ぐ。
+  const activeProcessingMessageIds = new Set(
+    Array.from(
+      document.querySelectorAll(
+        "[data-chat-stream-url][data-chat-message-id]",
+      ),
+    )
+      .map((message) => message.getAttribute("data-chat-message-id"))
+      .filter(Boolean),
+  );
   form.dataset.chatMounted = "true";
 
   function resize() {
@@ -200,6 +212,26 @@ export function mountChatForm(root) {
     });
   }
 
+  function setAttachmentNotice(message) {
+    if (!attachmentNotice) {
+      return;
+    }
+    attachmentNotice.textContent = message;
+    attachmentNotice.hidden = !message;
+  }
+
+  function appendFiles(files) {
+    const allowedFiles = filterAllowedFiles(files);
+    const availableSlots = Math.max(attachmentLimit - selectedFiles.length, 0);
+    const acceptedFiles = allowedFiles.slice(0, availableSlots);
+    replaceFiles([...selectedFiles, ...acceptedFiles]);
+    setAttachmentNotice(
+      allowedFiles.length > availableSlots
+        ? `Up to ${attachmentLimit} files can be attached.`
+        : "",
+    );
+  }
+
   function replaceFiles(files) {
     if (!fileInput) {
       return;
@@ -220,7 +252,7 @@ export function mountChatForm(root) {
       return;
     }
     const incomingFiles = Array.from(fileInput.files || []);
-    replaceFiles([...selectedFiles, ...filterAllowedFiles(incomingFiles)]);
+    appendFiles(incomingFiles);
   });
   composer?.addEventListener("dragover", (event) => {
     if (!fileUploadAllowed() || !event.dataTransfer?.types.includes("Files")) {
@@ -239,7 +271,7 @@ export function mountChatForm(root) {
     event.preventDefault();
     composer.classList.remove("dropActive");
     const droppedFiles = Array.from(event.dataTransfer?.files || []);
-    replaceFiles([...selectedFiles, ...filterAllowedFiles(droppedFiles)]);
+    appendFiles(droppedFiles);
   });
   textarea.addEventListener("paste", (event) => {
     const pastedFiles = clipboardImageFiles(event.clipboardData);
@@ -248,7 +280,7 @@ export function mountChatForm(root) {
       return;
     }
     event.preventDefault();
-    replaceFiles([...selectedFiles, ...allowedFiles]);
+    appendFiles(allowedFiles);
   });
   fileList?.addEventListener("click", (event) => {
     const target = event.target instanceof Element
@@ -265,6 +297,7 @@ export function mountChatForm(root) {
 
     const files = Array.from(fileInput.files || []);
     replaceFiles(files.filter((_, index) => index !== removeIndex));
+    setAttachmentNotice("");
   });
   fileLabel?.addEventListener("click", (event) => {
     if (fileInput?.disabled) {
@@ -317,23 +350,37 @@ export function mountChatForm(root) {
     resize();
   });
 
-  document.addEventListener("chat:stream-start", () => {
+  // HTMX差し替え後もdocument listener自体は残るため、切り離されたformを
+  // containsで無視する。一時的なEventSource再接続ではstream-endが来ないので、
+  // IDはSetに残り、応答のapplication終端までフォームをlockし続ける。
+  document.addEventListener("chat:stream-start", (event) => {
     if (!document.contains(form)) {
       return;
     }
-    activeProcessingCount += 1;
-    setProcessing(true);
+    const messageId = event instanceof CustomEvent
+      ? event.detail?.messageId
+      : null;
+    if (messageId) {
+      activeProcessingMessageIds.add(messageId);
+    }
+    setProcessing(activeProcessingMessageIds.size > 0);
   });
 
-  document.addEventListener("chat:stream-end", () => {
+  document.addEventListener("chat:stream-end", (event) => {
     if (!document.contains(form)) {
       return;
     }
-    activeProcessingCount = Math.max(0, activeProcessingCount - 1);
-    setProcessing(activeProcessingCount > 0);
+    const messageId = event instanceof CustomEvent
+      ? event.detail?.messageId
+      : null;
+    if (messageId) {
+      activeProcessingMessageIds.delete(messageId);
+    }
+    setProcessing(activeProcessingMessageIds.size > 0);
   });
 
   refreshFileState();
+  setProcessing(activeProcessingMessageIds.size > 0);
   refreshSubmitState();
   resize();
 }

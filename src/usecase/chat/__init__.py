@@ -50,7 +50,6 @@ from .build_chat_page import ChatPage, build_chat_page
 from .cancel_response import cancel_response
 from .create_chat import create_chat
 from .delete_thread import delete_thread
-from .ensure_response_started import ensure_response_started
 from .errors import ChatUsecaseError
 from .get_attachment import AttachmentDownload, get_attachment, get_attachment_download
 from .get_thread_detail import get_thread_detail
@@ -68,7 +67,6 @@ __all__ = [
     "chat_usecase_context",
     "create_chat",
     "delete_thread",
-    "ensure_response_started",
     "get_attachment_download",
     "get_attachment",
     "get_thread_detail",

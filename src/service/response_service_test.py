@@ -1,10 +1,12 @@
 import asyncio
+import logging
 import sqlite3
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from src.service.password import hash_password
 from src.models import (
     LlmMessage,
@@ -23,7 +25,11 @@ from src.infrastructure import (
     ThreadRepository,
     utcnow,
 )
-from src.service.response_service import ResponseJobStatus, ResponseService, StreamEvent
+from src.service.response_service import (
+    ResponseJobStatus,
+    ResponseService,
+    StreamEvent,
+)
 
 
 class SuccessfulResponder:
@@ -200,6 +206,101 @@ def test_response_service_persists_failed_message_with_partial_reasoning(
     ]
 
 
+def test_response_service_does_not_raise_when_message_is_deleted_during_generation(
+    tmp_path: Path,
+) -> None:
+    # 観点: 生成中に対象messageが削除されてもTask例外が漏れないこと。
+    # 目的: terminal永続化時のKeyErrorが元の生成Taskを未処理例外にしない。
+    database, message_id = _database_with_assistant_message(tmp_path)
+    with database.connect() as conn:
+        assert MessageRepository(conn).delete(message_id) is True
+        conn.commit()
+
+    service = ResponseService(database=database, responder=SuccessfulResponder())
+
+    asyncio.run(
+        service.run_response(
+            message_id=message_id,
+            messages=[{"role": "user", "content": "hello"}],
+            assistant=_assistant(),
+        )
+    )
+
+    # 終端jobは購読がなくても即時回収される。
+    assert service.jobs.get(message_id) is None
+
+
+def test_response_service_uses_existing_terminal_state_when_finalize_loses_race(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # 観点: 別処理が先にfailedへ確定した場合、そのDB状態をsuccessで上書きしないこと。
+    # 目的: 条件付きUPDATEが0件だった時に古いprocessing状態を終端結果として使わない。
+    database, message_id = _database_with_assistant_message(tmp_path)
+    caplog.set_level(logging.INFO, logger="src.service.response_service")
+    service = ResponseService(database=database, responder=SuccessfulResponder())
+    job = service.jobs.get_or_create(message_id)
+    with database.connect() as conn:
+        repo = MessageRepository(conn)
+        update_message(
+            conn,
+            repo.get(message_id),
+            content="cancelled elsewhere",
+            status=MessageStatus.FAILED,
+            kinds=[MessageKind(kind="reasoning", content="remote reasoning")],
+        )
+        conn.commit()
+
+    asyncio.run(
+        service.run_response(
+            message_id=message_id,
+            messages=[{"role": "user", "content": "hello"}],
+            assistant=_assistant(),
+        )
+    )
+
+    assert job.status is ResponseJobStatus.FAILED
+    assert job.error == "failed"
+    assert job.content_buffer == "cancelled elsewhere"
+    assert job.reasoning_buffer == "remote reasoning"
+    assert "response.job.completed " not in caplog.text
+    assert "response.job.terminal_conflict" in caplog.text
+
+
+def test_response_service_does_not_log_failure_when_completed_state_won_race(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # 観点: Provider失敗より先にcompletedが確定していた場合に失敗ログを出さないこと。
+    # 目的: DBをterminal正本とする状態と運用ログの結果を一致させる。
+    database, message_id = _database_with_assistant_message(tmp_path)
+    caplog.set_level(logging.INFO, logger="src.service.response_service")
+    service = ResponseService(database=database, responder=FailingResponder())
+    job = service.jobs.get_or_create(message_id)
+    with database.connect() as conn:
+        repo = MessageRepository(conn)
+        update_message(
+            conn,
+            repo.get(message_id),
+            content="winner",
+            status=MessageStatus.COMPLETED,
+        )
+        conn.commit()
+
+    asyncio.run(
+        service.run_response(
+            message_id=message_id,
+            messages=[{"role": "user", "content": "hello"}],
+            assistant=_assistant(),
+        )
+    )
+
+    assert job.status is ResponseJobStatus.COMPLETED
+    assert job.content_buffer == "winner"
+    assert "response.job.failed " not in caplog.text
+    assert "response.job.terminal_conflict" in caplog.text
+
+
 def test_response_service_cancels_running_response_with_partial_content(
     tmp_path: Path,
 ) -> None:
@@ -231,7 +332,7 @@ def test_response_service_cancels_running_response_with_partial_content(
 def test_response_service_keeps_running_task_when_start_is_called_again(
     tmp_path: Path,
 ) -> None:
-    # 観点: SSE再接続などで応答開始が再度呼ばれても実行中taskを上書きしないこと。
+    # 観点: 同一messageへの開始が重複して呼ばれても実行中taskを上書きしないこと。
     # 目的: キャンセル時にAIプロバイダ接続を持つ本物のtaskを確実に止める。
     database, message_id = _database_with_assistant_message(tmp_path)
     responder = WaitingResponder()
@@ -263,11 +364,82 @@ def test_response_service_keeps_running_task_when_start_is_called_again(
     assert cancelled_original is True
 
 
+def test_response_service_logs_without_content_on_success(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # 観点: 成功時ログに本文やreasoningが含まれないこと。
+    # 目的: 応答本文の二次保管を止めつつ、完了イベントだけを残す契約を固定する。
+    caplog.set_level(logging.INFO, logger="src.service.response_service")
+    database, message_id = _database_with_assistant_message(tmp_path)
+    service = ResponseService(database=database, responder=ReasoningResponder())
+
+    asyncio.run(
+        service.run_response(
+            message_id=message_id,
+            messages=[{"role": "user", "content": "hello"}],
+            assistant=_assistant(),
+        )
+    )
+
+    assert "thinking" not in caplog.text
+    assert "answer" not in caplog.text
+    assert "response.job.completed" in caplog.text
+
+
+def test_response_service_logs_without_content_on_cancel(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # 観点: キャンセル時ログに本文やreasoningが含まれないこと。
+    # 目的: 途中停止した応答でも機密本文をログへ出さない契約を固定する。
+    caplog.set_level(logging.INFO, logger="src.service.response_service")
+    database, message_id = _database_with_assistant_message(tmp_path)
+    responder = ReleasableResponder()
+    service = ResponseService(database=database, responder=responder)
+
+    async def run_and_cancel() -> bool:
+        service.start_response(
+            message_id=message_id,
+            messages=[{"role": "user", "content": "hello"}],
+            assistant=_assistant(),
+        )
+        await responder.first_delta_published.wait()
+        return await service.cancel_response(message_id)
+
+    cancelled = asyncio.run(run_and_cancel())
+
+    assert cancelled is True
+    assert "hello" not in caplog.text
+    assert "world" not in caplog.text
+    assert "response.job.cancelled" in caplog.text
+
+
+def test_response_service_logs_without_content_on_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # 観点: 失敗時ログに本文やreasoningが含まれないこと。
+    # 目的: 想定外例外でも応答内容を運用ログへ出さない契約を固定する。
+    caplog.set_level(logging.INFO, logger="src.service.response_service")
+    database, message_id = _database_with_assistant_message(tmp_path)
+    service = ResponseService(database=database, responder=FailingResponder())
+
+    asyncio.run(
+        service.run_response(
+            message_id=message_id,
+            messages=[{"role": "user", "content": "hello"}],
+            assistant=_assistant(),
+        )
+    )
+
+    assert "partial" not in caplog.text
+    assert "boom" not in caplog.text
+    assert "response.job.failed" in caplog.text
+
+
 def test_response_service_replaces_stale_task_from_stopped_loop(
     tmp_path: Path,
 ) -> None:
     # 観点: 別の停止済みevent loopに紐づくpending taskは実行中扱いしないこと。
-    # 目的: TestClientのPOST/GET境界でもSSE購読時に応答生成を開始できるようにする。
+    # 目的: 明示的な開始呼出しが停止済みloopのTaskに阻害されないようにする。
     database, message_id = _database_with_assistant_message(tmp_path)
     service = ResponseService(database=database, responder=SuccessfulResponder())
     stale_loop = asyncio.new_event_loop()
@@ -295,8 +467,8 @@ def test_response_service_replaces_stale_task_from_stopped_loop(
 def test_response_service_streams_running_job_events_and_persists_completed(
     tmp_path: Path,
 ) -> None:
-    # 観点: 実行中jobのSSE購読で既存bufferと以後のdelta/doneを受け取れること。
-    # 目的: HTTP routeではなくresponse_serviceでstream配信と完了永続化を固定する。
+    # 観点: 実行中jobのSSE購読で既存bufferと以後の最新full/doneを受け取れること。
+    # 目的: Event通知を蓄積せず最新snapshotを配信し、完了を永続化する契約を固定する。
     database, message_id = _database_with_assistant_message(tmp_path)
     responder = ReleasableResponder()
     service = ResponseService(database=database, responder=responder)
@@ -320,7 +492,7 @@ def test_response_service_streams_running_job_events_and_persists_completed(
     assert events == [
         StreamEvent("status", message_id=message_id, status="streaming"),
         StreamEvent("full", message_id=message_id, content="hello"),
-        StreamEvent("delta", message_id=message_id, delta=" world"),
+        StreamEvent("full", message_id=message_id, content="hello world"),
         StreamEvent("done", message_id=message_id),
     ]
     with database.connect() as conn:
@@ -338,8 +510,8 @@ def test_response_service_stream_replays_active_reasoning_buffer(
     service = ResponseService(database=database, responder=SuccessfulResponder())
     job = service.jobs.get_or_create(message_id)
     job.status = ResponseJobStatus.COMPLETED
-    asyncio.run(job.publish(StreamEvent("reasoning_delta", reasoning_delta="thinking")))
-    asyncio.run(job.publish(StreamEvent("delta", delta="answer")))
+    job.publish(StreamEvent("reasoning_delta", reasoning_delta="thinking"))
+    job.publish(StreamEvent("delta", delta="answer"))
 
     with database.connect() as conn:
         message = MessageRepository(conn).get(message_id)
@@ -350,6 +522,39 @@ def test_response_service_stream_replays_active_reasoning_buffer(
         StreamEvent("status", message_id=message_id, status="completed"),
         StreamEvent("full", message_id=message_id, content="answer"),
         StreamEvent("reasoning", message_id=message_id, reasoning="thinking"),
+        StreamEvent("done", message_id=message_id),
+    ]
+
+
+def test_response_service_stream_does_not_miss_publish_during_snapshot_yield(
+    tmp_path: Path,
+) -> None:
+    # 観点: snapshotのyield中にpublishと終端が起きても最新全文を送ること。
+    # 目的: revisionを送信済みとして早取りし、最後の更新をdone前に失わない。
+    database, message_id = _database_with_assistant_message(tmp_path)
+    service = ResponseService(database=database, responder=SuccessfulResponder())
+    job = service.jobs.get_or_create(message_id)
+    job.status = ResponseJobStatus.STREAMING
+    job.publish(StreamEvent("delta", delta="first"))
+    with database.connect() as conn:
+        message = MessageRepository(conn).get(message_id)
+
+    async def interrupt_stream() -> list[StreamEvent]:
+        stream = service.stream_events(message)
+        events = [await anext(stream), await anext(stream)]
+        job.publish(StreamEvent("delta", delta=" second"))
+        job.status = ResponseJobStatus.COMPLETED
+        job.close()
+        async for event in stream:
+            events.append(event)
+        return events
+
+    events = asyncio.run(interrupt_stream())
+
+    assert events == [
+        StreamEvent("status", message_id=message_id, status="streaming"),
+        StreamEvent("full", message_id=message_id, content="first"),
+        StreamEvent("full", message_id=message_id, content="first second"),
         StreamEvent("done", message_id=message_id),
     ]
 
@@ -378,6 +583,30 @@ def test_response_service_stream_replays_persisted_failed_message(
         StreamEvent("error", message_id=message_id, error="failed"),
         StreamEvent("done", message_id=message_id),
     ]
+
+
+def test_response_service_returns_waiting_when_processing_job_is_not_local(
+    tmp_path: Path,
+) -> None:
+    # 観点: local Jobがないprocessing messageのSSEをserverが保持しないこと。
+    # 目的: 別processの完了確認をEventSource再接続へ委ね、server側DB pollingをなくす。
+    database, message_id = _database_with_assistant_message(tmp_path)
+    service = ResponseService(database=database, responder=SuccessfulResponder())
+    with database.connect() as conn:
+        processing = MessageRepository(conn).get(message_id)
+
+    async def collect_without_polling() -> list[StreamEvent]:
+        return await asyncio.wait_for(
+            _collect_stream(service, processing),
+            timeout=0.1,
+        )
+
+    events = asyncio.run(collect_without_polling())
+
+    assert events == [
+        StreamEvent("status", message_id=message_id, status="waiting"),
+    ]
+    assert service.jobs.get(message_id) is None
 
 
 def test_response_service_stream_replays_persisted_reasoning_kind(

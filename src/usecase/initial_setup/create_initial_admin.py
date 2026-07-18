@@ -33,8 +33,10 @@ def create_initial_admin(
     最初の管理者作成だけを委譲できるようにするため。
     """
     ctx = context if context is not None else initial_setup_usecase_context()
-    with ctx.database.connect() as conn:
+    with ctx.database.transaction() as conn:
         repo = AuthRepository(conn)
+        if repo.is_initial_setup_completed():
+            raise InitialAdminAlreadyExistsError()
         if repo.has_admin_user():
             raise InitialAdminAlreadyExistsError()
         user = repo.create(
@@ -42,5 +44,5 @@ def create_initial_admin(
             is_admin=True,
             password_hash=hash_password(password, ctx.password_pepper),
         )
-        conn.commit()
+        repo.mark_initial_setup_completed()
         return user

@@ -58,7 +58,9 @@ async def save_message_attachments(
     if not bool(assistant.config.get("allow_file_upload", False)):
         raise UserInputError("file upload is not allowed for this assistant")
     if len(actual_uploads) > MAX_ATTACHMENTS_PER_MESSAGE:
-        raise UserInputError("too many attachments")
+        raise UserInputError(
+            f"too many attachments (maximum: {MAX_ATTACHMENTS_PER_MESSAGE})"
+        )
     allowed_file_extensions = _allowed_file_extensions_from_config(
         assistant.config.get("allowed_file_extensions")
     )

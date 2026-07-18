@@ -4,8 +4,9 @@
 <div class="authShell">
     <div class="panel authCard">
         <div class="panelBody">
+            <div class="setupBadge" role="note">First-time setup</div>
             <h1 class="authTitle">Initial Admin Setup</h1>
-            <p class="authDescription">Create the first administrator account.</p>
+            <p class="authDescription">Create the first administrator account. This setup is available only once.</p>
             {% if error %}<div class="inlineAlert alertDanger">User ID and password are required.</div>{% endif %}
             <form method="post" action="/setup/admin" class="formStack">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -34,6 +35,20 @@
     .authCard {
         min-width: 320px;
         max-width: 420px;
+        border-top: 4px solid var(--accent);
+    }
+
+    .setupBadge {
+        width: fit-content;
+        margin: 0 auto 0.75rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
     }
 
     .authTitle,

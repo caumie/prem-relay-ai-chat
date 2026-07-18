@@ -212,9 +212,78 @@ class MessageRepository:
         )
         return self.get(message.id)
 
-    def fail_processing_assistant_messages(self) -> int:
+    def update_processing_to_terminal(self, message: Message) -> Message | None:
+        """processing messageをterminal状態へ条件付き更新する。
+
+        Args:
+            message: completedまたはfailedへ更新するassistant message。
+
+        Returns:
+            更新後または既に確定済みのMessage。対象が存在しなければNone。
+
+        応答完了やcancelなどが競合しても、最初にprocessingから遷移した
+        結果だけを永続化し、後着の結果でterminal状態を上書きしないために使う。
+        commitは呼出し側の責務とする。
+
+        Raises:
+            ValueError: terminal以外のstatusを渡した場合。
         """
-        再起動後の processing assistant message は failed へ収束させる。
+        if message.status not in {MessageStatus.COMPLETED, MessageStatus.FAILED}:
+            raise ValueError("message status must be terminal")
+        cursor = self.conn.execute(
+            """
+            update messages set
+                status = :status,
+                assistant_id = :assistant_id,
+                updated_at = :updated_at
+            where
+                    id = :id
+                and status = :processing_status
+            """,
+            dict(
+                id=message.id,
+                status=message.status.value,
+                assistant_id=message.assistant_id,
+                updated_at=message.updated_at.isoformat(),
+                processing_status=MessageStatus.PROCESSING.value,
+            ),
+        )
+        if cursor.rowcount != 1:
+            # 0件は欠落だけでなく、cancelや別workerが先にterminalへ確定した
+            # 場合も含む。後着側へDB上の勝者を返し、古いprocessing snapshotを
+            # terminal結果として扱わせない。
+            try:
+                return self.get(message.id)
+            except KeyError:
+                return None
+        # status更新に勝った処理だけが本文・reasoningも置換する。
+        # 後着処理が先勝ちしたterminal snapshotを部分的に上書きしないため。
+        self.conn.execute(
+            """
+            delete from
+                message_kinds
+            where
+                message_id = :message_id
+            """,
+            dict(message_id=message.id),
+        )
+        self._insert_kinds(
+            kind_rows_from_message(
+                message,
+                created_at=message.updated_at.isoformat(),
+            )
+        )
+        return self.get(message.id)
+
+    def fail_processing_assistant_messages(self) -> int:
+        """再起動後のprocessing assistant messageをfailedへ収束させる。
+
+        Returns:
+            failedへ更新したmessage数。
+
+        Job所有権を永続化していないため、この一括更新は正式サポートする
+        単一workerの起動時だけ安全である。複数workerでは別processが生成中の
+        messageまで更新し得るため使用しない。
         """
         now = utcnow().isoformat()
         cursor = self.conn.execute(

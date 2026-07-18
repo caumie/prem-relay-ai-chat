@@ -179,10 +179,44 @@ class AuthRepository:
                 active_users
             where
                 is_admin = 1
+                and suspended_at is null
             limit 1
             """
         ).fetchone()
         return row is not None
+
+    def has_other_active_admin(self, user_id: int) -> bool:
+        """対象以外にログイン可能な管理者が存在するか返す。"""
+        row = self.conn.execute(
+            """
+            select 1
+            from active_users
+            where id <> :id
+              and is_admin = 1
+              and suspended_at is null
+            limit 1
+            """,
+            {"id": user_id},
+        ).fetchone()
+        return row is not None
+
+    def is_initial_setup_completed(self) -> bool:
+        """初期セットアップが完了済みか返す。"""
+        row = self.conn.execute(
+            "select 1 from initial_setup_state where id = 1"
+        ).fetchone()
+        return row is not None
+
+    def mark_initial_setup_completed(self) -> None:
+        """初期セットアップ完了を冪等に記録する。"""
+        self.conn.execute(
+            """
+            insert into initial_setup_state(id, completed_at)
+            values (1, :completed_at)
+            on conflict(id) do nothing
+            """,
+            {"completed_at": utcnow().isoformat()},
+        )
 
     def update(self, user: User, *, password_hash: str | None = None) -> User:
         existing = self.conn.execute(
@@ -261,32 +295,36 @@ class AuthRepository:
         if row is None:
             return False
         now = utcnow().isoformat()
-        self.conn.execute(
-            """
-            insert into deleted_users(
-                login_name,
-                deleted_at
-            )
-            values(
-                :login_name,
-                :deleted_at
-            )
-            """,
-            dict(
-                login_name=row["login_name"],
-                deleted_at=now,
-            ),
-        )
         cursor = self.conn.execute(
             """
             delete from
                 active_users
-            where
-                id = :id
+            where id = :id
+              and (
+                    is_admin = 0
+                    or suspended_at is not null
+                    or exists (
+                        select 1
+                        from active_users other
+                        where other.id <> active_users.id
+                          and other.is_admin = 1
+                          and other.suspended_at is null
+                    )
+              )
             """,
             dict(id=user_id),
         )
-        return cursor.rowcount == 1
-
+        if cursor.rowcount != 1:
+            if self.get_user(user_id) is None:
+                return False
+            return False
+        self.conn.execute(
+            """
+            insert into deleted_users(login_name, deleted_at)
+            values(:login_name, :deleted_at)
+            """,
+            dict(login_name=row["login_name"], deleted_at=now),
+        )
+        return True
 
 __all__ = ["AuthRepository"]

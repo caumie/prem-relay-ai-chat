@@ -99,11 +99,11 @@ async def create_chat(
     """新規チャット投稿を処理する。"""
     text = content.strip()
     logger.debug(
-        "route.chat_new_submit user_id=%s assistant_id=%s chars=%s preview=%s",
+        "chat.create.submit user_id=%s assistant_id=%s char_count=%s attachment_count=%s",
         user.id,
         assistant_id,
         len(text),
-        text[:120],
+        len(files),
     )
     try:
         result = await create_chat_usecase(
@@ -115,7 +115,7 @@ async def create_chat(
     except UserInputError as exc:
         raise HTTPException(400, str(exc)) from exc
     logger.info(
-        "chat.created thread_id=%s assistant_id=%s",
+        "chat.created thread_id=%s assistant_message_id=%s",
         result.thread.id,
         result.assistant_message.id,
     )
@@ -225,12 +225,12 @@ async def add_chat_message(
     """既存スレッドへの投稿を処理する。"""
     text = content.strip()
     logger.debug(
-        "route.chat_message_submit user_id=%s thread_id=%s assistant_id=%s chars=%s preview=%s",
+        "chat.message.submit user_id=%s thread_id=%s assistant_id=%s char_count=%s attachment_count=%s",
         user.id,
         thread_id,
         assistant_id,
         len(text),
-        text[:120],
+        len(files),
     )
     try:
         result = await add_message_usecase(
@@ -245,7 +245,7 @@ async def add_chat_message(
     except ChatUsecaseError as exc:
         raise HTTPException(404) from exc
     logger.info(
-        "chat.message_added thread_id=%s assistant_id=%s",
+        "chat.message_added thread_id=%s assistant_message_id=%s",
         thread_id,
         result.assistant_message.id,
     )
@@ -317,7 +317,11 @@ async def stream_response(
     response_id: int,
     user: User = Depends(current_user),
 ) -> StreamingResponse:
-    """assistant 応答の SSE stream を返す。"""
+    """assistant応答を観測するSSEを返し、生成開始は行わない。
+
+    local Jobがないprocessing応答は短いwaiting streamとして終了する。
+    ブラウザのEventSource再接続が次の所有者検証とDB確認を起動する。
+    """
     try:
         response_message = prepare_response_stream(
             user_id=user.id,

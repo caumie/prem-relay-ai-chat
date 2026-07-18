@@ -1,6 +1,9 @@
 """admin user ユースケースの責務を検証する。"""
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from src.service.password import verify_password
 from src.infrastructure import (
@@ -12,7 +15,7 @@ from src.infrastructure import (
     utcnow,
 )
 from src.config import AppConfig
-from src.models import Attachment, UserAssistant
+from src.models import Attachment, User, UserAssistant
 from src.usecase.admin_user import (
     AdminUserUsecaseContext,
     admin_user_usecase_context,
@@ -20,6 +23,10 @@ from src.usecase.admin_user import (
     delete_user,
     suspend_user,
     update_user,
+)
+from src.usecase.admin_user.errors import (
+    CannotModifyCurrentAdminError,
+    LastActiveAdminError,
 )
 from src.usecase.runtime import init_usecase_runtime
 
@@ -81,12 +88,16 @@ def test_update_user_rewrites_login_name_admin_flag_and_password(
     created = create_user(
         login_name="user1", password="pass123", is_admin=False, context=context
     )
+    actor = create_user(
+        login_name="admin", password="adminpass", is_admin=True, context=context
+    )
 
     updated = update_user(
         user_id=created.id,
         login_name="  user1-updated  ",
         password="pass456",
         is_admin=True,
+        actor=actor,
         context=context,
     )
 
@@ -109,8 +120,11 @@ def test_suspend_user_marks_user_as_suspended(tmp_path: Path) -> None:
     created = create_user(
         login_name="user1", password="pass123", is_admin=False, context=context
     )
+    actor = create_user(
+        login_name="admin", password="adminpass", is_admin=True, context=context
+    )
 
-    suspended = suspend_user(user_id=created.id, context=context)
+    suspended = suspend_user(user_id=created.id, actor=actor, context=context)
 
     with database.connect() as conn:
         stored = AuthRepository(conn).get_user(created.id)
@@ -130,6 +144,9 @@ def test_delete_user_removes_related_records_and_attachment_file(
     uploads_dir = context.attachment_storage.uploads_dir
     created = create_user(
         login_name="user1", password="pass123", is_admin=False, context=context
+    )
+    actor = create_user(
+        login_name="admin", password="adminpass", is_admin=True, context=context
     )
     stored_file = uploads_dir / str(created.id) / "photo.png"
     stored_file.parent.mkdir(parents=True, exist_ok=True)
@@ -168,7 +185,7 @@ def test_delete_user_removes_related_records_and_attachment_file(
         )
         conn.commit()
 
-    deleted = delete_user(user_id=created.id, context=context)
+    deleted = delete_user(user_id=created.id, actor=actor, context=context)
 
     with database.connect() as conn:
         active_user = AuthRepository(conn).get_user(created.id)
@@ -196,6 +213,83 @@ def test_delete_user_removes_related_records_and_attachment_file(
     assert thread_count == 0
     assert user_assistant_count == 0
     assert not stored_file.exists()
+
+
+def test_admin_user_usecase_preserves_the_last_active_admin(tmp_path: Path) -> None:
+    # 観点: 最後の有効管理者の降格・休止・削除をUsecaseが拒否すること。
+    # 目的: HTTP Routeを経由しない管理操作でも復旧不能な状態を作らない。
+    context = _context(tmp_path)
+    actor = create_user(
+        login_name="admin", password="adminpass", is_admin=True, context=context
+    )
+
+    with pytest.raises(LastActiveAdminError):
+        update_user(
+            user_id=actor.id,
+            login_name="admin",
+            password="",
+            is_admin=False,
+            actor=actor,
+            context=context,
+        )
+    with pytest.raises(CannotModifyCurrentAdminError):
+        suspend_user(user_id=actor.id, actor=actor, context=context)
+    with pytest.raises(CannotModifyCurrentAdminError):
+        delete_user(user_id=actor.id, actor=actor, context=context)
+
+
+def test_admin_user_usecase_rejects_self_suspend_and_delete_with_another_admin(
+    tmp_path: Path,
+) -> None:
+    # 観点: 有効管理者が複数いてもactor自身の休止・削除を拒否すること。
+    # 目的: 既存の自己ロックアウト防止規則をUsecaseの認可として固定する。
+    context = _context(tmp_path)
+    actor = create_user(
+        login_name="admin", password="adminpass", is_admin=True, context=context
+    )
+    create_user(login_name="other", password="otherpass", is_admin=True, context=context)
+
+    with pytest.raises(CannotModifyCurrentAdminError):
+        suspend_user(user_id=actor.id, actor=actor, context=context)
+    with pytest.raises(CannotModifyCurrentAdminError):
+        delete_user(user_id=actor.id, actor=actor, context=context)
+
+
+def test_admin_user_usecase_serializes_concurrent_last_admin_transitions(
+    tmp_path: Path,
+) -> None:
+    # 観点: 2件の同時降格が有効管理者0人を作らないこと。
+    # 目的: BEGIN IMMEDIATEとRepository条件判定の競合耐性をUsecase近接で固定する。
+    context = _context(tmp_path)
+    first = create_user(
+        login_name="first", password="firstpass", is_admin=True, context=context
+    )
+    second = create_user(
+        login_name="second", password="secondpass", is_admin=True, context=context
+    )
+
+    def demote(actor: User) -> str:
+        try:
+            update_user(
+                user_id=actor.id,
+                login_name=actor.login_name,
+                password="",
+                is_admin=False,
+                actor=actor,
+                context=context,
+            )
+        except LastActiveAdminError:
+            return "rejected"
+        return "updated"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(demote, (first, second)))
+
+    with context.database.connect() as conn:
+        active_admins = AuthRepository(conn).list_users()
+
+    assert sorted(results) == ["rejected", "updated"]
+    assert sum(user.is_admin and user.suspended_at is None for user in active_admins) == 1
 
 
 def _context(tmp_path: Path) -> AdminUserUsecaseContext:

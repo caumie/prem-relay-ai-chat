@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from src.infrastructure import AuthRepository
 from src.infrastructure.database import Database
 
 
@@ -97,6 +98,34 @@ def test_initialize_applies_chat_schema_shape(tmp_path: Path) -> None:
     assert message_kinds_columns["message_id"]["type"] == "integer"
     assert message_kinds_columns["order_index"]["type"] == "integer"
     assert ["login_name"] in unique_user_index_columns.values()
+
+
+def test_initialize_backfills_initial_setup_state_for_existing_admin(
+    tmp_path: Path,
+) -> None:
+    # 観点: 完了状態導入前のDBに管理者がいれば起動時に一度だけ補完すること。
+    # 目的: 既存DBで初期セットアップを再公開せず新しい状態表へ移行する。
+    database = Database(tmp_path / "chat.sqlite")
+    database.initialize()
+    with database.connect() as conn:
+        AuthRepository(conn).create(
+            login_name="owner",
+            is_admin=True,
+            password_hash="hash",
+        )
+        conn.commit()
+        conn.execute("drop table initial_setup_state")
+        conn.commit()
+
+    database.initialize()
+    database.initialize()
+
+    with database.connect() as conn:
+        completed = conn.execute(
+            "select count(*) from initial_setup_state"
+        ).fetchone()[0]
+
+    assert completed == 1
 
 
 def test_connect_enables_foreign_keys_and_row_factory(tmp_path: Path) -> None:
@@ -202,3 +231,29 @@ def test_connect_keeps_writes_transactional_until_commit(tmp_path: Path) -> None
 
     assert count_before_commit == 0
     assert count_after_commit == 1
+
+
+def test_immediate_transaction_commits_and_rolls_back(tmp_path: Path) -> None:
+    # 観点: 書き込みtransactionが即時ロックを取得し、成功時commit・失敗時rollbackすること。
+    # 目的: 管理者状態の確認と更新を同一の直列化された境界へ閉じ込める。
+    database = Database(tmp_path / "chat.sqlite")
+    database.initialize()
+
+    with database.transaction() as conn:
+        conn.execute(
+            "insert into active_users(login_name, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
+            ("committed", "hash", "now", "now"),
+        )
+
+    with pytest.raises(RuntimeError):
+        with database.transaction() as conn:
+            conn.execute(
+                "insert into active_users(login_name, password_hash, created_at, updated_at) values (?, ?, ?, ?)",
+                ("rolled-back", "hash", "now", "now"),
+            )
+            raise RuntimeError("rollback")
+
+    with database.connect() as conn:
+        names = [row[0] for row in conn.execute("select login_name from active_users")]
+
+    assert names == ["committed"]

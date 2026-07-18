@@ -12,6 +12,15 @@ create table if not exists deleted_users (
     login_name text not null,
     deleted_at text not null
 );
+create table if not exists initial_setup_state (
+    id integer primary key check (id = 1),
+    completed_at text not null
+);
+
+insert into initial_setup_state(id, completed_at)
+select 1, CURRENT_TIMESTAMP
+where not exists (select 1 from initial_setup_state)
+  and exists (select 1 from active_users where is_admin = 1);
 create table if not exists base_assistants (
     id text primary key,
     name text not null,

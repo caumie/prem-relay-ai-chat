@@ -149,31 +149,56 @@ def load_connection_providers(data_dir: Path) -> list[ConnectionProvider]:
     """connection_providers.json から固定接続先一覧を読み込む。"""
     path = data_dir / "connection_providers.json"
     if not path.exists():
-        logger.warning("providers.load missing path=%s fallback=default", path)
+        logger.warning(
+            "providers.load missing path=%s result=default reason=file_missing",
+            path,
+        )
         return [default_connection_provider()]
     try:
         raw: JsonValue = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        logger.warning(
+            "providers.load invalid_json path=%s result=default reason=invalid_json",
+            path,
+        )
         return [default_connection_provider()]
     if not isinstance(raw, dict):
+        logger.warning(
+            "providers.load invalid_shape path=%s result=default reason=invalid_shape",
+            path,
+        )
         return [default_connection_provider()]
     items_value = raw.get("providers")
     if not isinstance(items_value, list):
+        logger.warning(
+            "providers.load invalid_shape path=%s result=default reason=invalid_shape",
+            path,
+        )
         return [default_connection_provider()]
     providers: list[ConnectionProvider] = []
+    rejected_count = 0
     for item in items_value:
         if not isinstance(item, dict):
+            rejected_count += 1
             continue
         provider = _connection_provider_from_dict(item)
         if provider is not None:
             providers.append(provider)
+        else:
+            rejected_count += 1
     logger.debug(
-        "providers.load path=%s count=%s ids=%s",
+        "providers.load path=%s accepted_count=%s rejected_count=%s",
         path,
         len(providers),
-        [provider.id for provider in providers],
+        rejected_count,
     )
-    return providers or [default_connection_provider()]
+    if not providers:
+        logger.warning(
+            "providers.load empty path=%s accepted_count=0 result=default reason=no_valid_provider",
+            path,
+        )
+        return [default_connection_provider()]
+    return providers
 
 
 def connection_provider_by_id(

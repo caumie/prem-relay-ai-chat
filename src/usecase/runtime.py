@@ -21,7 +21,7 @@ class UsecaseRuntime:
     Args:
         database: 永続化に使う Database。
         config: usecase の実行時依存を組み立てた元のアプリ設定。
-        response_service: assistant 応答生成を開始・購読する service。
+        response_service: このworker process内だけでJobを所有する応答service。
         attachment_storage: 添付ファイル実体の保存・解決境界。
         load_connection_providers: 接続先定義を読み込む関数。
     """
@@ -48,8 +48,9 @@ def init_usecase_runtime(
     Returns:
         初期化した UsecaseRuntime。
 
-    app 起動時に一度呼ぶ。Database と設定を共有runtimeへ集約し、
-    usecase 側は各領域の context 経由で必要な依存へ変換して読む。
+    appのworker processごとに起動時一度だけ呼ぶ。Databaseと設定を共有runtimeへ
+    集約し、usecase側は各領域のcontext経由で必要な依存へ変換して読む。
+    ResponseServiceのJob Storeはprocess-localであり、worker間では共有しない。
     """
     global runtime
     cfg = config if config is not None else load_app_config()

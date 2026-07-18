@@ -32,7 +32,7 @@ from src.models import (
     MessageStatus,
     Thread,
 )
-from src.usecase.admin_user import AdminUserUsecaseContext, create_user
+from src.usecase.initial_setup import create_initial_admin
 
 
 def test_chat_thread_renders_saved_reasoning_kind(tmp_path: Path) -> None:
@@ -315,15 +315,9 @@ def _ensure_default_assistant(test_app: TestApplication) -> str:
     with test_app.usecase_runtime.database.connect() as conn:
         user = AuthRepository(conn).get_by_login_name("admin")
     if user is None:
-        user = create_user(
+        user = create_initial_admin(
             login_name="admin",
             password="adminpass",
-            is_admin=True,
-            context=AdminUserUsecaseContext(
-                database=test_app.usecase_runtime.database,
-                password_pepper="test-pepper",
-                attachment_storage=test_app.usecase_runtime.attachment_storage,
-            ),
         )
     with test_app.usecase_runtime.database.connect() as conn:
         assistants = BaseAssistantRepository(conn)

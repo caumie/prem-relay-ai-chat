@@ -1,6 +1,7 @@
 {% set streaming = msg.role == "assistant" and msg.status == "processing" %}
 {% set reasoning_text = msg.kinds | selectattr("kind", "equalto", "reasoning") | map(attribute="content") | join("") %}
 {% set file_kinds = msg.kinds | selectattr("kind", "equalto", "file") | list %}
+{# processing中は再描画・再読込後もEventSourceを再開し、最終DB状態を観測する。 #}
 <div id="msg_{{ msg.id }}" class="messageItem {{ 'userMessage' if msg.role == 'user' else 'assistantMessage' }}{% if streaming %} streaming{% endif %}"
     data-chat-message data-chat-message-id="{{ msg.id }}" data-chat-message-role="{{ msg.role }}"
     data-chat-message-status="{{ msg.status }}" {% if streaming %}

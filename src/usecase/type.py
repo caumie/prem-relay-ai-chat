@@ -46,7 +46,7 @@ class ResponseStarter(Protocol):
 
 
 class ResponseEventStreamer(Protocol):
-    """assistant 応答生成イベントを購読する境界を表す。"""
+    """生成を開始せず、assistant応答イベントだけを購読する境界を表す。"""
 
     def stream_events(self, message: Message) -> AsyncIterator[StreamEvent]:
         """対象messageのイベント列を返す。

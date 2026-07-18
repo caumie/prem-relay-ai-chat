@@ -20,4 +20,5 @@ USER appuser
 
 EXPOSE 8000
 
+# Response Jobはprocess-localなので、分散所有権を導入するまでは単一workerで起動する。
 CMD ["uvicorn", "src.app:build_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

@@ -7,6 +7,7 @@ APIRouter 取り込みと登録順だけをここへ集約し、dependency/conte
 
 from fastapi import FastAPI
 
+from . import index as index_routes
 from . import assistant as assistant_routes
 from . import auth as auth_routes
 from . import chat as chat_routes
@@ -31,6 +32,7 @@ def register_web_routes(app: FastAPI) -> None:
     """
     get_presentation_runtime()
 
+    app.include_router(index_routes.router)
     app.include_router(auth_routes.router)
     app.include_router(setup_routes.router)
     app.include_router(assistant_routes.router)

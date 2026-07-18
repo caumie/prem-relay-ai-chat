@@ -8,10 +8,13 @@ Request/Responseやテンプレート描画は扱わない。
 import asyncio
 import json
 import logging
+import sqlite3
+from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from time import perf_counter
 from typing import Literal, Protocol
 
 from ..models import LlmMessage, Message, MessageKind, MessageStatus, ResolvedAssistant
@@ -89,11 +92,27 @@ class ResponseJobStatus(StrEnum):
     FAILED = "failed"
 
 
-def _empty_subscribers() -> set[asyncio.Queue[StreamEvent | None]]:
+@dataclass(frozen=True)
+class ResponseJobSnapshot:
+    """一度の同期読取で確定した、購読者向けJob snapshotを表す。
+
+    SSEのyield中にもProvider Taskは進むため、各fieldをyieldの都度読むと
+    revisionと本文が異なる時点の値になる。この型へまとめてから送信することで、
+    送信後の再比較による取りこぼし検出を可能にする。
+    """
+
+    revision: int
+    status: ResponseJobStatus
+    content: str
+    reasoning: str
+    error: str
+
+
+def _empty_subscribers() -> set[asyncio.Event]:
     """ResponseJob.subscribers用に型付きの空setを返す。
 
     Returns:
-        新しい購読者Queueのset。
+        新しい購読通知Eventのset。
     """
     return set()
 
@@ -108,7 +127,7 @@ class ResponseJob:
         content_buffer: これまでに生成された本文。
         reasoning_buffer: これまでに生成されたreasoning。
         error: 失敗理由。
-        subscribers: SSE接続ごとのイベントQueue。
+        subscribers: SSE接続ごとの更新通知Event。
     """
 
     message_id: int
@@ -118,35 +137,57 @@ class ResponseJob:
     error: str = ""
     cancel_requested: bool = False
     task: asyncio.Task[None] | None = None
-    subscribers: set[asyncio.Queue[StreamEvent | None]] = field(
+    revision: int = 0
+    subscribers: set[asyncio.Event] = field(
         default_factory=_empty_subscribers
     )
 
-    def subscribe(self) -> asyncio.Queue[StreamEvent | None]:
-        """ジョブのイベント購読Queueを作成する。
+    def subscribe(self) -> asyncio.Event:
+        """ジョブの更新を購読するEventを作成する。
 
         Returns:
-            この購読者専用のQueue。
+            この購読者専用の通知Event。
 
-        複数タブや再接続が同じ生成を追えるよう、購読者ごとにQueueを分ける。
+        Eventはデータを保持せず「snapshotが変化した」というwakeだけに使う。
+        そのため遅い購読者にもProvider event数に比例するbacklogが生じない。
         """
-        queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
-        self.subscribers.add(queue)
-        return queue
+        event = asyncio.Event()
+        self.subscribers.add(event)
+        logger.debug(
+            "response.job.subscribe message_id=%s subscriber_count=%s",
+            self.message_id,
+            len(self.subscribers),
+        )
+        return event
 
-    def unsubscribe(self, queue: asyncio.Queue[StreamEvent | None]) -> None:
-        """購読Queueをジョブから外す。
+    def unsubscribe(self, event: asyncio.Event) -> None:
+        """購読Eventをジョブから外す。
 
         Args:
-            queue: `subscribe()` で作成したQueue。
+            event: `subscribe()` で作成したEvent。
 
         Returns:
             None。
         """
-        self.subscribers.discard(queue)
+        self.subscribers.discard(event)
+        logger.debug(
+            "response.job.unsubscribe message_id=%s subscriber_count=%s",
+            self.message_id,
+            len(self.subscribers),
+        )
 
-    async def publish(self, event: StreamEvent) -> None:
-        """生成イベントをkind別bufferへ反映し、全購読者へ配信する。
+    def snapshot(self) -> ResponseJobSnapshot:
+        """現在revisionと表示内容を一度に読み取って返す。"""
+        return ResponseJobSnapshot(
+            revision=self.revision,
+            status=self.status,
+            content=self.content_buffer,
+            reasoning=self.reasoning_buffer,
+            error=self.error,
+        )
+
+    def publish(self, event: StreamEvent) -> None:
+        """生成イベントをkind別bufferへ反映し、全購読者へ更新を通知する。
 
         Args:
             event: responderまたはserviceが発行したStreamEvent。
@@ -165,18 +206,20 @@ class ResponseJob:
             self.reasoning_buffer += event.reasoning_delta
         if event.type == "reasoning":
             self.reasoning_buffer = event.reasoning
-        for queue in list(self.subscribers):
-            await queue.put(event)
+        # Eventは複数回のsetを一つへcoalesceできる。購読者はrevisionを比較し、
+        # wake回数ではなく最新snapshotを正として読む。
+        self.revision += 1
+        for subscriber in list(self.subscribers):
+            subscriber.set()
 
-    async def close(self) -> None:
-        """全購読者へ終端を通知し、購読状態を破棄する。
+    def close(self) -> None:
+        """全購読者をwakeして終端snapshotを確認させる。
 
         Returns:
             None。
         """
-        for queue in list(self.subscribers):
-            await queue.put(None)
-        self.subscribers.clear()
+        for subscriber in list(self.subscribers):
+            subscriber.set()
 
 
 class ResponseJobStore:
@@ -237,7 +280,12 @@ class Responder(Protocol):
 class ResponseService:
     """応答生成ジョブの開始、実行、SSEイベント復元をまとめる。"""
 
-    def __init__(self, *, database: Database, responder: Responder) -> None:
+    def __init__(
+        self,
+        *,
+        database: Database,
+        responder: Responder,
+    ) -> None:
         """ResponseServiceを作成する。
 
         Args:
@@ -292,10 +340,39 @@ class ResponseService:
         )
         job.task = task
         self.background_tasks.add(task)
-        task.add_done_callback(self.background_tasks.discard)
+        task.add_done_callback(self._observe_background_task)
+
+    def _observe_background_task(self, task: asyncio.Task[None]) -> None:
+        """完了Taskを回収し、未取得例外として失われる前に結果を観測する。
+
+        Args:
+            task: `start_response()`が登録した生成Task。
+
+        Returns:
+            None。
+        """
+        self.background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exception = task.exception()
+        if exception is not None:
+            logger.error(
+                "response.job.unhandled_exception error_type=%s",
+                type(exception).__name__,
+            )
 
     async def cancel_response(self, message_id: int) -> bool:
-        """実行中の応答生成taskを止め、部分本文をfailedとして残す。"""
+        """local応答生成Taskを止め、部分本文をfailedとして残す。
+
+        Args:
+            message_id: cancelするassistant message ID。
+
+        Returns:
+            このprocessがJobを所有して処理できればTrue、なければFalse。
+
+        Jobはprocess-localなので、Falseはusecaseが条件付きDB fallbackを行う
+        判定に使う。
+        """
         job = self.jobs.get(message_id)
         if job is None:
             return False
@@ -307,13 +384,7 @@ class ResponseService:
             with suppress(asyncio.CancelledError):
                 await task
             return True
-        self._fail_message(
-            message_id=message_id,
-            content=job.content_buffer,
-            reasoning=job.reasoning_buffer,
-        )
-        job.status = ResponseJobStatus.FAILED
-        await job.close()
+        await self._finalize_job(job, MessageStatus.FAILED, "cancelled")
         return True
 
     async def run_response(
@@ -341,6 +412,8 @@ class ResponseService:
             return
         job.status = ResponseJobStatus.STREAMING
         logger.debug("response.job.start message_id=%s", message_id)
+        started_at = perf_counter()
+        event_counts: Counter[str] = Counter()
         try:
             async for event in self.responder.stream(
                 messages=messages,
@@ -353,7 +426,8 @@ class ResponseService:
                     "reasoning_delta",
                     "status",
                 }:
-                    await job.publish(
+                    event_counts[event.type] += 1
+                    job.publish(
                         StreamEvent(
                             event.type,
                             message_id=message_id,
@@ -364,71 +438,75 @@ class ResponseService:
                             status=event.status,
                         )
                     )
+                # responderが連続yieldしてもcancel要求を処理する機会を
+                # event loopへ返す。
                 await asyncio.sleep(0)
-            with self.database.connect() as conn:
-                repo = MessageRepository(conn)
-                message = repo.get(message_id)
-                repo.update(
-                    replace(
-                        message,
-                        content=job.content_buffer,
-                        status=MessageStatus.COMPLETED,
-                        kinds=_reasoning_kinds(job.reasoning_buffer) or [],
-                        updated_at=utcnow(),
-                    )
+            terminal_status = await self._finalize_job(
+                job, MessageStatus.COMPLETED, ""
+            )
+            # DBのterminal状態が正本であり、success側が競合に負けた場合は
+            # completedとして記録しない。
+            if terminal_status is not ResponseJobStatus.COMPLETED:
+                logger.info(
+                    "response.job.terminal_conflict message_id=%s requested=completed actual=%s",
+                    message_id,
+                    terminal_status.value,
                 )
-                conn.commit()
-            job.status = ResponseJobStatus.COMPLETED
+                return
             logger.info(
-                "response.job.completed message_id=%s chars=%s content=%r reasoning=%r",
+                "response.job.completed message_id=%s result=success duration_ms=%s chars=%s reasoning_chars=%s event_counts=%s",
                 message_id,
+                int((perf_counter() - started_at) * 1000),
                 len(job.content_buffer),
-                job.content_buffer,
-                job.reasoning_buffer,
+                len(job.reasoning_buffer),
+                dict(event_counts),
             )
         except asyncio.CancelledError:
             if not job.cancel_requested:
+                # cancel_response経由でない停止は所有者側の制御として伝播し、
+                # user cancelと誤認してDBをfailedへ確定しない。
                 job.status = ResponseJobStatus.QUEUED
                 raise
-            self._fail_message(
-                message_id=message_id,
-                content=job.content_buffer,
-                reasoning=job.reasoning_buffer,
+            terminal_status = await self._finalize_job(
+                job, MessageStatus.FAILED, "cancelled"
             )
-            job.status = ResponseJobStatus.FAILED
-            job.error = "cancelled"
+            if terminal_status is not ResponseJobStatus.FAILED:
+                logger.info(
+                    "response.job.terminal_conflict message_id=%s requested=failed actual=%s",
+                    message_id,
+                    terminal_status.value,
+                )
+                return
             logger.info(
-                "response.job.cancelled message_id=%s chars=%s content=%r reasoning=%r",
+                "response.job.cancelled message_id=%s result=cancelled duration_ms=%s chars=%s reasoning_chars=%s event_counts=%s",
                 message_id,
+                int((perf_counter() - started_at) * 1000),
                 len(job.content_buffer),
-                job.content_buffer,
-                job.reasoning_buffer,
+                len(job.reasoning_buffer),
+                dict(event_counts),
             )
         except Exception as exc:
-            with self.database.connect() as conn:
-                repo = MessageRepository(conn)
-                message = repo.get(message_id)
-                repo.update(
-                    replace(
-                        message,
-                        content=job.content_buffer,
-                        status=MessageStatus.FAILED,
-                        kinds=_reasoning_kinds(job.reasoning_buffer) or [],
-                        updated_at=utcnow(),
-                    )
+            terminal_status = await self._finalize_job(
+                job, MessageStatus.FAILED, type(exc).__name__
+            )
+            if terminal_status is not ResponseJobStatus.FAILED:
+                logger.info(
+                    "response.job.terminal_conflict message_id=%s requested=failed actual=%s",
+                    message_id,
+                    terminal_status.value,
                 )
-                conn.commit()
-            job.status = ResponseJobStatus.FAILED
-            job.error = str(exc)
+                return
             logger.error(
-                "response.job.failed message_id=%s error=%s content=%r reasoning=%r",
+                "response.job.failed message_id=%s result=failed duration_ms=%s error_type=%s chars=%s reasoning_chars=%s event_counts=%s",
                 message_id,
-                exc,
-                job.content_buffer,
-                job.reasoning_buffer,
+                int((perf_counter() - started_at) * 1000),
+                type(exc).__name__,
+                len(job.content_buffer),
+                len(job.reasoning_buffer),
+                dict(event_counts),
             )
         finally:
-            await job.close()
+            job.close()
 
     async def stream_events(self, message: Message) -> AsyncIterator[StreamEvent]:
         """messageに対応するSSEイベント列を返す。
@@ -437,88 +515,170 @@ class ResponseService:
             message: stream対象のassistant message。
 
         Yields:
-            status/full/delta/error/done のStreamEvent。
+            status/full/reasoning/error/done の最新snapshotイベント。
 
         メモリ上jobが存在しない場合でも、DBに保存済みの本文と状態から
         画面が自然に終端できるイベント列を復元する。
         """
         job = self.jobs.get(message.id)
         if job is None:
-            if message.content:
+            # SSE GETは観測専用であり、Jobを持たないworkerから生成を再開しない。
+            # DBを一度だけ確認し、processingなら短い応答を閉じてEventSourceの
+            # 標準再接続へ次の観測を委ねる。
+            with self.database.connect() as conn:
+                try:
+                    latest = MessageRepository(conn).get(message.id)
+                except KeyError:
+                    yield StreamEvent(
+                        "error", message_id=message.id, error="target_missing"
+                    )
+                    yield StreamEvent("done", message_id=message.id)
+                    return
+            if latest.status is MessageStatus.PROCESSING:
+                yield StreamEvent("status", message_id=message.id, status="waiting")
+                return
+            if latest.content:
                 yield StreamEvent(
-                    "full", message_id=message.id, content=message.content
+                    "full", message_id=message.id, content=latest.content
                 )
-            reasoning = _reasoning_content(message)
+            reasoning = _reasoning_content(latest)
             if reasoning:
                 yield StreamEvent(
                     "reasoning",
                     message_id=message.id,
                     reasoning=reasoning,
                 )
-            if message.status is MessageStatus.FAILED:
+            if latest.status is MessageStatus.FAILED:
                 yield StreamEvent("error", message_id=message.id, error="failed")
             yield StreamEvent("done", message_id=message.id)
             return
 
-        queue = job.subscribe()
+        subscriber = job.subscribe()
+        last_revision = -1
+        sent_status = False
         try:
-            yield StreamEvent("status", message_id=message.id, status=job.status.value)
-            if job.content_buffer:
-                yield StreamEvent(
-                    "full",
-                    message_id=message.id,
-                    content=job.content_buffer,
-                )
-            if job.reasoning_buffer:
-                yield StreamEvent(
-                    "reasoning",
-                    message_id=message.id,
-                    reasoning=job.reasoning_buffer,
-                )
-            if job.status == ResponseJobStatus.COMPLETED:
-                yield StreamEvent("done", message_id=message.id)
-                self.jobs.remove(message.id)
-                return
-            if job.status == ResponseJobStatus.FAILED:
-                yield StreamEvent(
-                    "error",
-                    message_id=message.id,
-                    error=job.error or "failed",
-                )
-                yield StreamEvent("done", message_id=message.id)
-                self.jobs.remove(message.id)
-                return
             while True:
-                event = await queue.get()
-                if event is None:
-                    break
-                yield event
+                # snapshot取得前にclearする。直後にpublishされてもEventが再度setされ、
+                # snapshot取得後からwait開始までの通知を失わない。
+                subscriber.clear()
+                snapshot = job.snapshot()
+                if not sent_status:
+                    yield StreamEvent(
+                        "status",
+                        message_id=message.id,
+                        status=snapshot.status.value,
+                    )
+                    sent_status = True
+                if snapshot.revision != last_revision:
+                    if snapshot.content:
+                        yield StreamEvent(
+                            "full",
+                            message_id=message.id,
+                            content=snapshot.content,
+                        )
+                    if snapshot.reasoning:
+                        yield StreamEvent(
+                            "reasoning",
+                            message_id=message.id,
+                            reasoning=snapshot.reasoning,
+                        )
+                    last_revision = snapshot.revision
+                if snapshot.status is ResponseJobStatus.COMPLETED:
+                    yield StreamEvent("done", message_id=message.id)
+                    self.jobs.remove(message.id)
+                    return
+                if snapshot.status is ResponseJobStatus.FAILED:
+                    yield StreamEvent(
+                        "error",
+                        message_id=message.id,
+                        error=snapshot.error or "failed",
+                    )
+                    yield StreamEvent("done", message_id=message.id)
+                    self.jobs.remove(message.id)
+                    return
+                current = job.snapshot()
+                # yield中に進んだ更新は、送信済みrevisionとして扱わず次のloopで
+                # 最新全文を再送する。変化がない時だけEvent待機へ入る。
+                if (
+                    current.revision != snapshot.revision
+                    or current.status is not snapshot.status
+                ):
+                    continue
+                await subscriber.wait()
         finally:
-            job.unsubscribe(queue)
+            job.unsubscribe(subscriber)
 
-        if job.error:
-            yield StreamEvent(
-                "error", message_id=message.id, error=job.error or "failed"
-            )
-        else:
-            yield StreamEvent("done", message_id=message.id)
-        self.jobs.remove(message.id)
+    async def _finalize_job(
+        self,
+        job: ResponseJob,
+        status: MessageStatus,
+        error: str,
+    ) -> ResponseJobStatus:
+        """DB terminalを正本として生成Jobを一度だけ確定・回収する。
 
-    def _fail_message(self, *, message_id: int, content: str, reasoning: str) -> None:
-        """部分本文とreasoningをfailed messageとして永続化する。"""
-        with self.database.connect() as conn:
-            repo = MessageRepository(conn)
-            message = repo.get(message_id)
-            repo.update(
-                replace(
-                    message,
-                    content=content,
-                    status=MessageStatus.FAILED,
-                    kinds=_reasoning_kinds(reasoning) or [],
-                    updated_at=utcnow(),
+        Args:
+            job: 確定するprocess-local Job。
+            status: completedまたはfailedの要求状態。
+            error: failed時にSSEへ返す理由。completed時は空文字列。
+
+        Returns:
+            条件付き更新の競合も含め、実際に確定したJob状態。
+
+        DB更新の勝者でstatus/content/reasoningを揃え、接続中snapshotと
+        再接続後の表示を一致させる。対象消失やSQLite失敗でもlocal TaskとJobを
+        残さないため、メモリ上はfailedとして購読者をwakeして即時回収する。
+        """
+        persisted = False
+        effective_status = status
+        try:
+            with self.database.connect() as conn:
+                repo = MessageRepository(conn)
+                current = repo.get(job.message_id)
+                terminal = repo.update_processing_to_terminal(
+                    replace(
+                        current,
+                        content=job.content_buffer,
+                        status=status,
+                        kinds=_reasoning_kinds(job.reasoning_buffer) or [],
+                        updated_at=utcnow(),
+                    )
                 )
-            )
-            conn.commit()
+                if terminal is not None:
+                    conn.commit()
+                    # UPDATEに負けた場合もRepositoryはDB上の勝者を返す。
+                    # statusだけでなく表示snapshotも勝者へ揃え、接続中の画面と
+                    # 再接続後のDB表示を一致させる。
+                    effective_status = terminal.status
+                    terminal_reasoning = _reasoning_content(terminal)
+                    if (
+                        terminal.content != job.content_buffer
+                        or terminal_reasoning != job.reasoning_buffer
+                    ):
+                        job.revision += 1
+                    job.content_buffer = terminal.content
+                    job.reasoning_buffer = terminal_reasoning
+                    persisted = True
+                else:
+                    error = "target_missing"
+        except KeyError:
+            logger.info("response.job.target_missing message_id=%s", job.message_id)
+            error = "target_missing"
+        except sqlite3.OperationalError:
+            logger.exception("response.job.finalize_failed message_id=%s", job.message_id)
+            # TODO: 永続化失敗後にDBへ残るprocessingを再収束する回収経路は未実装。
+            # ここではlocal TaskとJobだけを収束し、無制限に保持しない。
+            error = "persistence_failed"
+        if persisted and effective_status is MessageStatus.COMPLETED:
+            job.status = ResponseJobStatus.COMPLETED
+            job.error = ""
+        else:
+            job.status = ResponseJobStatus.FAILED
+            job.error = error or "failed"
+        # subscriberはJob参照を保持しているため、Storeから即時回収しても
+        # wake後に最後のsnapshotを送れる。購読有無でJob寿命を変えない。
+        job.close()
+        self.jobs.remove(job.message_id)
+        return job.status
 
 
 def _task_is_running(task: asyncio.Task[None] | None) -> bool:

@@ -1,0 +1,134 @@
+<div class="sidebarThemeControl" aria-label="Theme">
+  <button
+    class="sidebarThemeButton isActive"
+    type="button"
+    data-theme-value="light"
+    aria-pressed="true"
+    title="Light theme"
+  >
+    <i class="fas fa-sun"></i><span>Light</span>
+  </button>
+  <button
+    class="sidebarThemeButton"
+    type="button"
+    data-theme-value="dark"
+    aria-pressed="false"
+    title="Dark theme"
+  >
+    <i class="fas fa-moon"></i><span>Dark</span>
+  </button>
+  <style>
+    @scope {
+      :scope {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-self: stretch;
+        gap: 0.25rem;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.2rem;
+        margin-top: 0.45rem;
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        background: var(--bg-input);
+      }
+      .sidebarThemeButton {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        width: 100%;
+        min-height: 2.15rem;
+        padding: 0.4rem 0.55rem;
+        border: 0;
+        border-radius: var(--radius-md);
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 0.82rem;
+        white-space: nowrap;
+        transition:
+          background-color 0.15s ease,
+          color 0.15s ease;
+      }
+      .sidebarThemeButton:hover,
+      .sidebarThemeButton:focus-visible {
+        background: var(--bg-sidebar-hover);
+        color: var(--text-main);
+      }
+      .sidebarThemeButton:not(.isActive) {
+        border: 1px solid var(--border-subtle);
+      }
+      .sidebarThemeButton.isActive {
+        background: var(--accent);
+        color: var(--text-message-user);
+      }
+    }
+  </style>
+  <script>
+    (() => {
+      const storageKey = "chat.theme";
+      const themes = new Set(["light", "dark"]);
+      const control = document.currentScript.parentElement;
+
+      /**
+       * @param {string | undefined | null} value Theme candidate.
+       * @returns {string} Supported theme or the default theme.
+       * Prevents invalid DOM or storage values from reaching the page theme.
+       */
+      function normalizeTheme(value) {
+        return themes.has(value) ? value : "light";
+      }
+
+      /**
+       * @returns {string} Stored theme or the default theme.
+       * Keeps initialization working when Firefox blocks storage access.
+       */
+      function readTheme() {
+        try {
+          return normalizeTheme(window.localStorage.getItem(storageKey));
+        } catch {
+          return "light";
+        }
+      }
+
+      /**
+       * @param {string} theme Theme to persist.
+       * @returns {void}
+       * Keeps visual switching available when persistence is unavailable.
+       */
+      function writeTheme(theme) {
+        try {
+          window.localStorage.setItem(storageKey, theme);
+        } catch {
+          // The selected theme remains active for the current page.
+        }
+      }
+
+      /**
+       * @param {string} theme Theme to apply.
+       * @returns {void}
+       * Synchronizes the page theme and this component's accessible state.
+       */
+      function applyTheme(theme) {
+        const nextTheme = normalizeTheme(theme);
+        document.documentElement.dataset.theme = nextTheme;
+        control.querySelectorAll("[data-theme-value]").forEach((button) => {
+          const selected = button.dataset.themeValue === nextTheme;
+          button.classList.toggle("isActive", selected);
+          button.setAttribute("aria-pressed", selected ? "true" : "false");
+        });
+      }
+
+      applyTheme(readTheme());
+      control.querySelectorAll("[data-theme-value]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const theme = normalizeTheme(button.dataset.themeValue);
+          applyTheme(theme);
+          writeTheme(theme);
+        });
+      });
+    })();
+  </script>
+</div>

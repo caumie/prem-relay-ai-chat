@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from src.presentation.test_support import (
@@ -97,7 +98,7 @@ def test_user_assistant_create_route_requires_base_assistant_id(
 
 
 def test_user_assistant_create_route_redirects_and_appears_in_chat(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 観点: My Assistant作成POST後に自分のチャット選択肢へ表示されること。
     # 目的: ユーザー画面からチャット利用までのHTTP導線を固定する。
@@ -123,10 +124,13 @@ def test_user_assistant_create_route_redirects_and_appears_in_chat(
 
     assert response.status_code == 303
     assert "Personal" in chat_page.text
+    captured = capsys.readouterr()
+    assert "audit.user_assistant.created" in captured.err
+    assert "description" not in captured.err
 
 
 def test_user_assistant_update_route_redirects_and_lists_changes(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 観点: My Assistant編集POSTが対象を更新して一覧へ戻ること。
     # 目的: update_user_assistant usecaseへのHTTPフォーム配線を固定する。
@@ -158,10 +162,12 @@ def test_user_assistant_update_route_redirects_and_lists_changes(
 
     assert response.status_code == 303
     assert "Personal Updated" in listed.text
+    captured = capsys.readouterr()
+    assert "audit.user_assistant.updated" in captured.err
 
 
 def test_user_assistant_delete_route_redirects_and_hides_assistant(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 観点: My Assistant削除POSTが対象を一覧から隠すこと。
     # 目的: delete_user_assistant usecaseへのHTTPフォーム配線を固定する。
@@ -186,6 +192,8 @@ def test_user_assistant_delete_route_redirects_and_hides_assistant(
 
     assert response.status_code == 303
     assert "Personal" not in after_delete.text
+    captured = capsys.readouterr()
+    assert "audit.user_assistant.deleted" in captured.err
 
 
 def _config(tmp_path: Path) -> AppConfig:

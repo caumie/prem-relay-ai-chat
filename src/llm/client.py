@@ -7,9 +7,11 @@
 """
 
 import logging
+from collections import Counter
 from inspect import isawaitable
 from collections.abc import AsyncGenerator, AsyncIterable, Mapping
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Protocol, TypeGuard
 
 from openai import AsyncOpenAI
@@ -322,27 +324,38 @@ class OpenAIResponder:
             config=runtime_config.options,
             max_tokens=runtime_config.max_tokens,
         )
+        # TODO: 接続・応答待ち・stream全体のtimeoutと再試行条件を設定値として持ち、
+        # 応答しない互換APIが生成jobを無期限に占有しないようにする。
         sdk_client = AsyncOpenAI(
             api_key=runtime_config.api_key,
             base_url=assistant.base_url,
         )
         client = OpenAIClientAdapter(sdk_client)
+        started_at = perf_counter()
+        event_counts: Counter[str] = Counter()
         logger.info(
-            "llm.start assistant_id=%s api_mode=%s base_url=%s model=%s message_count=%s config_keys=%s",
+            "llm.request.started assistant_id=%s api_mode=%s model=%s message_count=%s",
             assistant.id,
             assistant.api_mode,
-            assistant.base_url,
             runtime_config.model,
             len(messages),
-            sorted(runtime_config.options.keys()),
         )
         try:
             async for event in api_client.stream_events(
                 client=client,
                 request=request,
             ):
+                event_counts[event.type] += 1
                 yield event
         finally:
+            logger.info(
+                "llm.request.completed assistant_id=%s api_mode=%s model=%s duration_ms=%s event_counts=%s",
+                assistant.id,
+                assistant.api_mode,
+                runtime_config.model,
+                int((perf_counter() - started_at) * 1000),
+                dict(event_counts),
+            )
             await _close_provider_resource(sdk_client)
 
 

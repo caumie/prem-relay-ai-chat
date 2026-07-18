@@ -1,5 +1,6 @@
 """ユーザー向け assistant 管理画面の HTML router を担当する。"""
 
+import logging
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -28,6 +29,7 @@ from .context import current_user, presentation_templates, shell_context
 from .util.csrf import verify_csrf_token
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -87,12 +89,18 @@ async def user_assistant_create(
 ) -> Response:
     """現在ユーザー向けマイアシスタント作成フォームを処理する。"""
     try:
-        create_user_assistant(
+        assistant = create_user_assistant(
             actor=user,
             **await _user_assistant_form_payload(request),
         )
     except UserInputError as exc:
         raise HTTPException(400, str(exc)) from exc
+    logger.info(
+        "audit.user_assistant.created actor_user_id=%s target_user_id=%s resource_id=%s result=success",
+        user.id,
+        user.id,
+        assistant.id,
+    )
     return RedirectResponse("/assistants", 303)
 
 
@@ -132,7 +140,7 @@ async def user_assistant_update(
 ) -> Response:
     """現在ユーザー向けマイアシスタント編集フォームを処理する。"""
     try:
-        update_user_assistant(
+        assistant = update_user_assistant(
             actor=user,
             user_assistant_id=assistant_id,
             **await _user_assistant_form_payload(request),
@@ -141,6 +149,12 @@ async def user_assistant_update(
         raise HTTPException(400, str(exc)) from exc
     except AssistantUsecaseError as exc:
         raise HTTPException(404, str(exc)) from exc
+    logger.info(
+        "audit.user_assistant.updated actor_user_id=%s target_user_id=%s resource_id=%s result=success",
+        user.id,
+        user.id,
+        assistant.id,
+    )
     return RedirectResponse("/assistants", 303)
 
 
@@ -152,12 +166,19 @@ async def user_assistant_delete(
 ) -> Response:
     """現在ユーザー向けマイアシスタント削除を処理する。"""
     try:
-        delete_user_assistant(
+        deleted = delete_user_assistant(
             actor=user,
             user_assistant_id=assistant_id,
         )
     except AssistantUsecaseError as exc:
         raise HTTPException(404, str(exc)) from exc
+    if deleted:
+        logger.info(
+            "audit.user_assistant.deleted actor_user_id=%s target_user_id=%s resource_id=%s result=success",
+            user.id,
+            user.id,
+            assistant_id,
+        )
     return RedirectResponse("/assistants", 303)
 
 
