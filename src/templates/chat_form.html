@@ -4,6 +4,7 @@
     hx-post="{% if thread %}/chat/{{ thread.id }}/messages{% else %}/chat/new{% endif %}"
     hx-target="{% if thread %}#messages{% else %}#chat-main{% endif %}"
     hx-swap="{% if thread %}beforeend{% else %}outerHTML{% endif %}" data-chat-submit-debounce-ms="400"
+    {% if thread %}hx-select="#messages > .messageItem"{% endif %}
     data-chat-processing="{{ 'true' if has_processing_message else 'false' }}" data-chat-file-limit="10">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
     <div class="modelSelectRow">

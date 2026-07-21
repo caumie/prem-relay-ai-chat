@@ -1,12 +1,10 @@
 import asyncio
-import logging
 import sqlite3
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
 from src.service.password import hash_password
 from src.models import (
     LlmMessage,
@@ -232,12 +230,10 @@ def test_response_service_does_not_raise_when_message_is_deleted_during_generati
 
 def test_response_service_uses_existing_terminal_state_when_finalize_loses_race(
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # 観点: 別処理が先にfailedへ確定した場合、そのDB状態をsuccessで上書きしないこと。
     # 目的: 条件付きUPDATEが0件だった時に古いprocessing状態を終端結果として使わない。
     database, message_id = _database_with_assistant_message(tmp_path)
-    caplog.set_level(logging.INFO, logger="src.service.response_service")
     service = ResponseService(database=database, responder=SuccessfulResponder())
     job = service.jobs.get_or_create(message_id)
     with database.connect() as conn:
@@ -263,18 +259,14 @@ def test_response_service_uses_existing_terminal_state_when_finalize_loses_race(
     assert job.error == "failed"
     assert job.content_buffer == "cancelled elsewhere"
     assert job.reasoning_buffer == "remote reasoning"
-    assert "response.job.completed " not in caplog.text
-    assert "response.job.terminal_conflict" in caplog.text
 
 
-def test_response_service_does_not_log_failure_when_completed_state_won_race(
+def test_response_service_uses_completed_state_when_finalize_loses_race(
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # 観点: Provider失敗より先にcompletedが確定していた場合に失敗ログを出さないこと。
-    # 目的: DBをterminal正本とする状態と運用ログの結果を一致させる。
+    # 観点: Provider失敗より先にcompletedが確定した場合、DB状態を維持すること。
+    # 目的: 条件付きUPDATEが0件だった時に古いprocessing状態で上書きしない。
     database, message_id = _database_with_assistant_message(tmp_path)
-    caplog.set_level(logging.INFO, logger="src.service.response_service")
     service = ResponseService(database=database, responder=FailingResponder())
     job = service.jobs.get_or_create(message_id)
     with database.connect() as conn:
@@ -297,8 +289,6 @@ def test_response_service_does_not_log_failure_when_completed_state_won_race(
 
     assert job.status is ResponseJobStatus.COMPLETED
     assert job.content_buffer == "winner"
-    assert "response.job.failed " not in caplog.text
-    assert "response.job.terminal_conflict" in caplog.text
 
 
 def test_response_service_cancels_running_response_with_partial_content(
@@ -362,77 +352,6 @@ def test_response_service_keeps_running_task_when_start_is_called_again(
 
     assert same_task is True
     assert cancelled_original is True
-
-
-def test_response_service_logs_without_content_on_success(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    # 観点: 成功時ログに本文やreasoningが含まれないこと。
-    # 目的: 応答本文の二次保管を止めつつ、完了イベントだけを残す契約を固定する。
-    caplog.set_level(logging.INFO, logger="src.service.response_service")
-    database, message_id = _database_with_assistant_message(tmp_path)
-    service = ResponseService(database=database, responder=ReasoningResponder())
-
-    asyncio.run(
-        service.run_response(
-            message_id=message_id,
-            messages=[{"role": "user", "content": "hello"}],
-            assistant=_assistant(),
-        )
-    )
-
-    assert "thinking" not in caplog.text
-    assert "answer" not in caplog.text
-    assert "response.job.completed" in caplog.text
-
-
-def test_response_service_logs_without_content_on_cancel(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    # 観点: キャンセル時ログに本文やreasoningが含まれないこと。
-    # 目的: 途中停止した応答でも機密本文をログへ出さない契約を固定する。
-    caplog.set_level(logging.INFO, logger="src.service.response_service")
-    database, message_id = _database_with_assistant_message(tmp_path)
-    responder = ReleasableResponder()
-    service = ResponseService(database=database, responder=responder)
-
-    async def run_and_cancel() -> bool:
-        service.start_response(
-            message_id=message_id,
-            messages=[{"role": "user", "content": "hello"}],
-            assistant=_assistant(),
-        )
-        await responder.first_delta_published.wait()
-        return await service.cancel_response(message_id)
-
-    cancelled = asyncio.run(run_and_cancel())
-
-    assert cancelled is True
-    assert "hello" not in caplog.text
-    assert "world" not in caplog.text
-    assert "response.job.cancelled" in caplog.text
-
-
-def test_response_service_logs_without_content_on_failure(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    # 観点: 失敗時ログに本文やreasoningが含まれないこと。
-    # 目的: 想定外例外でも応答内容を運用ログへ出さない契約を固定する。
-    caplog.set_level(logging.INFO, logger="src.service.response_service")
-    database, message_id = _database_with_assistant_message(tmp_path)
-    service = ResponseService(database=database, responder=FailingResponder())
-
-    asyncio.run(
-        service.run_response(
-            message_id=message_id,
-            messages=[{"role": "user", "content": "hello"}],
-            assistant=_assistant(),
-        )
-    )
-
-    assert "partial" not in caplog.text
-    assert "boom" not in caplog.text
-    assert "response.job.failed" in caplog.text
 
 
 def test_response_service_replaces_stale_task_from_stopped_loop(

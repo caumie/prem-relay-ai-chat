@@ -83,7 +83,7 @@ async def create_initial_admin_from_form(
             password=password,
         )
     except InitialAdminAlreadyExistsError:
-        logger.info(
+        logger.warning(
             "audit.initial_admin.denied actor=initial_setup result=denied reason=already_exists"
         )
         return RedirectResponse("/login", 303)

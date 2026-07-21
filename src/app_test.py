@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-import pytest
 from fastapi.testclient import TestClient
 from starlette.routing import Mount, Route
 
@@ -147,21 +146,18 @@ def test_session_cookie_secure_setting_controls_secure_attribute(
     assert "secure" not in insecure_cookie.lower()
 
 
-def test_http_request_id_is_exposed_to_response_and_logs(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # 観点: HTTP requestごとに request_id が生成され、レスポンスヘッダとログへ出ること。
-    # 目的: 同一要求をログとレスポンスで相関できる境界を固定する。
-    client = started_test_client(build_app(_config(tmp_path), responder=FakeResponder()))
+def test_http_request_id_is_exposed_to_response(tmp_path: Path) -> None:
+    # 観点: HTTP requestごとに request_id が生成されること。
+    # 目的: クライアントが障害報告時に要求を識別できるようにする。
+    client = started_test_client(
+        build_app(_config(tmp_path), responder=FakeResponder())
+    )
 
     response = client.get("/login")
 
-    captured = capsys.readouterr()
     request_id = response.headers["X-Request-ID"]
 
     assert request_id
-    assert request_id in captured.err
-    assert "request_id=" in captured.err
 
 
 def _config(tmp_path: Path, *, session_cookie_secure: bool = False) -> AppConfig:

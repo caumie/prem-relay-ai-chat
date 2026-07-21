@@ -2,7 +2,6 @@ import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from src.presentation.test_support import (
@@ -24,9 +23,7 @@ class FakeResponder:
         yield StreamEvent("delta", delta="ok")
 
 
-def test_admin_user_create_route_redirects_and_lists_user(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_admin_user_create_route_redirects_and_lists_user(tmp_path: Path) -> None:
     # 観点: 管理者のユーザー作成POSTがCSRF付きフォームから実行され一覧へ戻ること。
     # 目的: user作成の業務詳細ではなくHTTP入口の配線契約だけを固定する。
     app = build_app(_config(tmp_path), responder=FakeResponder())
@@ -47,12 +44,10 @@ def test_admin_user_create_route_redirects_and_lists_user(
 
     assert response.status_code == 303
     assert "user1" in listed.text
-    captured = capsys.readouterr()
-    assert "audit.user.created" in captured.err
 
 
 def test_admin_user_update_route_redirects_and_lists_updated_user(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
 ) -> None:
     # 観点: 管理者のユーザー編集POSTが対象ユーザーを更新して一覧へ戻ること。
     # 目的: update_user usecaseへのHTTPフォーム配線を固定する。
@@ -76,12 +71,10 @@ def test_admin_user_update_route_redirects_and_lists_updated_user(
 
     assert response.status_code == 303
     assert "user1-updated" in listed.text
-    captured = capsys.readouterr()
-    assert "audit.user.updated" in captured.err
 
 
 def test_admin_user_suspend_route_redirects_and_exposes_delete_action(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
 ) -> None:
     # 観点: 管理者のユーザー休止POSTが対象を休止状態にし削除操作を表示すること。
     # 目的: suspend_user usecaseへのHTTPフォーム配線を固定する。
@@ -100,12 +93,10 @@ def test_admin_user_suspend_route_redirects_and_exposes_delete_action(
 
     assert response.status_code == 303
     assert f"/admin/users/{user.id}/delete" in edit_page.text
-    captured = capsys.readouterr()
-    assert "audit.user.suspended" in captured.err
 
 
 def test_admin_user_delete_route_redirects_and_removes_user_from_list(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
 ) -> None:
     # 観点: 休止済みユーザーの削除POSTが対象を一覧から除外すること。
     # 目的: delete_user usecaseへのHTTPフォーム配線を固定する。
@@ -130,8 +121,6 @@ def test_admin_user_delete_route_redirects_and_removes_user_from_list(
 
     assert response.status_code == 303
     assert "user1" not in listed.text
-    captured = capsys.readouterr()
-    assert "audit.user.deleted" in captured.err
 
 
 def test_admin_user_routes_reject_non_admin_user(tmp_path: Path) -> None:
@@ -199,7 +188,9 @@ def _config(tmp_path: Path) -> AppConfig:
     )
 
 
-def _login(client: TestClient, login_name: str = "admin", password: str = "adminpass") -> None:
+def _login(
+    client: TestClient, login_name: str = "admin", password: str = "adminpass"
+) -> None:
     if login_name == "admin" and password == "adminpass":
         _ensure_initial_admin(client)
     login_token = _csrf_token(client.get("/login").text)

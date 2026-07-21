@@ -23,6 +23,20 @@ from ..infrastructure import Database, MessageRepository, utcnow
 logger = logging.getLogger(__name__)
 
 
+def _log_safe_exception(message: str, exception: BaseException, *args: object) -> None:
+    """例外メッセージを出さず、原因スタックだけをERRORへ記録する。"""
+    sanitized_exception = RuntimeError(type(exception).__name__)
+    logger.error(
+        message,
+        *args,
+        exc_info=(
+            RuntimeError,
+            sanitized_exception,
+            exception.__traceback__,
+        ),
+    )
+
+
 def _reasoning_kinds(reasoning: str) -> list[MessageKind] | None:
     if not reasoning:
         return None
@@ -138,9 +152,7 @@ class ResponseJob:
     cancel_requested: bool = False
     task: asyncio.Task[None] | None = None
     revision: int = 0
-    subscribers: set[asyncio.Event] = field(
-        default_factory=_empty_subscribers
-    )
+    subscribers: set[asyncio.Event] = field(default_factory=_empty_subscribers)
 
     def subscribe(self) -> asyncio.Event:
         """ジョブの更新を購読するEventを作成する。
@@ -356,8 +368,9 @@ class ResponseService:
             return
         exception = task.exception()
         if exception is not None:
-            logger.error(
+            _log_safe_exception(
                 "response.job.unhandled_exception error_type=%s",
+                exception,
                 type(exception).__name__,
             )
 
@@ -441,24 +454,26 @@ class ResponseService:
                 # responderが連続yieldしてもcancel要求を処理する機会を
                 # event loopへ返す。
                 await asyncio.sleep(0)
-            terminal_status = await self._finalize_job(
-                job, MessageStatus.COMPLETED, ""
-            )
+            terminal_status = await self._finalize_job(job, MessageStatus.COMPLETED, "")
             # DBのterminal状態が正本であり、success側が競合に負けた場合は
             # completedとして記録しない。
             if terminal_status is not ResponseJobStatus.COMPLETED:
-                logger.info(
+                logger.debug(
                     "response.job.terminal_conflict message_id=%s requested=completed actual=%s",
                     message_id,
                     terminal_status.value,
                 )
                 return
             logger.info(
-                "response.job.completed message_id=%s result=success duration_ms=%s chars=%s reasoning_chars=%s event_counts=%s",
+                "response.job.completed message_id=%s result=success duration_ms=%s chars=%s reasoning_chars=%s",
                 message_id,
                 int((perf_counter() - started_at) * 1000),
                 len(job.content_buffer),
                 len(job.reasoning_buffer),
+            )
+            logger.debug(
+                "response.job.event_counts message_id=%s event_counts=%s",
+                message_id,
                 dict(event_counts),
             )
         except asyncio.CancelledError:
@@ -471,18 +486,22 @@ class ResponseService:
                 job, MessageStatus.FAILED, "cancelled"
             )
             if terminal_status is not ResponseJobStatus.FAILED:
-                logger.info(
+                logger.debug(
                     "response.job.terminal_conflict message_id=%s requested=failed actual=%s",
                     message_id,
                     terminal_status.value,
                 )
                 return
             logger.info(
-                "response.job.cancelled message_id=%s result=cancelled duration_ms=%s chars=%s reasoning_chars=%s event_counts=%s",
+                "response.job.cancelled message_id=%s result=cancelled duration_ms=%s chars=%s reasoning_chars=%s",
                 message_id,
                 int((perf_counter() - started_at) * 1000),
                 len(job.content_buffer),
                 len(job.reasoning_buffer),
+            )
+            logger.debug(
+                "response.job.event_counts message_id=%s event_counts=%s",
+                message_id,
                 dict(event_counts),
             )
         except Exception as exc:
@@ -490,19 +509,24 @@ class ResponseService:
                 job, MessageStatus.FAILED, type(exc).__name__
             )
             if terminal_status is not ResponseJobStatus.FAILED:
-                logger.info(
+                logger.debug(
                     "response.job.terminal_conflict message_id=%s requested=failed actual=%s",
                     message_id,
                     terminal_status.value,
                 )
                 return
-            logger.error(
-                "response.job.failed message_id=%s result=failed duration_ms=%s error_type=%s chars=%s reasoning_chars=%s event_counts=%s",
+            _log_safe_exception(
+                "response.job.failed message_id=%s result=failed duration_ms=%s error_type=%s chars=%s reasoning_chars=%s",
+                exc,
                 message_id,
                 int((perf_counter() - started_at) * 1000),
                 type(exc).__name__,
                 len(job.content_buffer),
                 len(job.reasoning_buffer),
+            )
+            logger.debug(
+                "response.job.event_counts message_id=%s event_counts=%s",
+                message_id,
                 dict(event_counts),
             )
         finally:
@@ -538,9 +562,7 @@ class ResponseService:
                 yield StreamEvent("status", message_id=message.id, status="waiting")
                 return
             if latest.content:
-                yield StreamEvent(
-                    "full", message_id=message.id, content=latest.content
-                )
+                yield StreamEvent("full", message_id=message.id, content=latest.content)
             reasoning = _reasoning_content(latest)
             if reasoning:
                 yield StreamEvent(
@@ -661,10 +683,14 @@ class ResponseService:
                 else:
                     error = "target_missing"
         except KeyError:
-            logger.info("response.job.target_missing message_id=%s", job.message_id)
+            logger.debug("response.job.target_missing message_id=%s", job.message_id)
             error = "target_missing"
-        except sqlite3.OperationalError:
-            logger.exception("response.job.finalize_failed message_id=%s", job.message_id)
+        except sqlite3.OperationalError as exc:
+            _log_safe_exception(
+                "response.job.finalize_failed message_id=%s",
+                exc,
+                job.message_id,
+            )
             # TODO: 永続化失敗後にDBへ残るprocessingを再収束する回収経路は未実装。
             # ここではlocal TaskとJobだけを収束し、無制限に保持しない。
             error = "persistence_failed"

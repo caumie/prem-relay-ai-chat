@@ -1,4 +1,3 @@
-
 """OpenAI互換LLM APIとの接続を担当する。
 
 このファイルは OpenAI SDK の event object や APIモード差分を受け止め、
@@ -21,6 +20,21 @@ from ..service.response_service import StreamEvent
 
 logger = logging.getLogger(__name__)
 
+
+def _log_safe_exception(message: str, exception: BaseException, *args: object) -> None:
+    """例外メッセージを出さず、原因スタックだけをERRORへ記録する。"""
+    sanitized_exception = RuntimeError(type(exception).__name__)
+    logger.error(
+        message,
+        *args,
+        exc_info=(
+            RuntimeError,
+            sanitized_exception,
+            exception.__traceback__,
+        ),
+    )
+
+
 INTERNAL_RUNTIME_CONFIG_KEYS = {
     "max_history_messages",
     "allow_file_upload",
@@ -29,12 +43,7 @@ INTERNAL_RUNTIME_CONFIG_KEYS = {
 
 
 LlmRequestValue = (
-    str
-    | int
-    | float
-    | bool
-    | list[LlmMessage]
-    | AssistantGenerationConfig
+    str | int | float | bool | list[LlmMessage] | AssistantGenerationConfig
 )
 LlmRequest = dict[str, LlmRequestValue]
 
@@ -63,6 +72,7 @@ class OpenAISdkClient(Protocol):
     ) -> AsyncGenerator[object]:
         """Chat Completions APIのstreamを作成する。"""
         ...
+
 
 class OpenAIStreamClient(Protocol):
     """API mode別LLM clientの共通インターフェースを定義する。
@@ -334,10 +344,14 @@ class OpenAIResponder:
         started_at = perf_counter()
         event_counts: Counter[str] = Counter()
         logger.info(
-            "llm.request.started assistant_id=%s api_mode=%s model=%s message_count=%s",
+            "llm.request.started assistant_id=%s api_mode=%s model=%s",
             assistant.id,
             assistant.api_mode,
             runtime_config.model,
+        )
+        logger.debug(
+            "llm.request.context assistant_id=%s message_count=%s",
+            assistant.id,
             len(messages),
         )
         try:
@@ -347,15 +361,30 @@ class OpenAIResponder:
             ):
                 event_counts[event.type] += 1
                 yield event
-        finally:
-            logger.info(
-                "llm.request.completed assistant_id=%s api_mode=%s model=%s duration_ms=%s event_counts=%s",
+        except Exception as exc:
+            _log_safe_exception(
+                "llm.request.failed assistant_id=%s api_mode=%s model=%s duration_ms=%s",
+                exc,
                 assistant.id,
                 assistant.api_mode,
                 runtime_config.model,
                 int((perf_counter() - started_at) * 1000),
+            )
+            raise
+        else:
+            logger.info(
+                "llm.request.completed assistant_id=%s api_mode=%s model=%s duration_ms=%s",
+                assistant.id,
+                assistant.api_mode,
+                runtime_config.model,
+                int((perf_counter() - started_at) * 1000),
+            )
+            logger.debug(
+                "llm.request.event_counts assistant_id=%s event_counts=%s",
+                assistant.id,
                 dict(event_counts),
             )
+        finally:
             await _close_provider_resource(sdk_client)
 
 
@@ -409,7 +438,6 @@ class ResponsesApiClient:
         )
         async for event in stream:
             event_type = str(getattr(event, "type", "") or "")
-            logger.debug("llm.raw_event api_mode=responses type=%s", event_type)
             if event_type.startswith("response.reasoning") and event_type.endswith(
                 ".delta"
             ):
@@ -476,10 +504,6 @@ class ChatCompletionsApiClient:
             max_tokens=_request_optional_int(request, "max_tokens"),
         )
         async for event in stream:
-            event_type = str(getattr(event, "type", "") or "")
-            logger.debug(
-                "llm.raw_event api_mode=chat_completions type=%s", event_type
-            )
             choice = _first_choice(getattr(event, "choices", None))
             choice_delta = getattr(choice, "delta", None)
             reasoning_delta = _read_first_text(

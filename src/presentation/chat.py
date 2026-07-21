@@ -60,7 +60,7 @@ async def chat_home(
     page = build_chat_page(user_id=user.id)
     if page is None:
         raise HTTPException(404)
-    logger.info("route.chat_home user_id=%s thread_count=%s", user.id, len(page.threads))
+    logger.debug("route.chat_home user_id=%s thread_count=%s", user.id, len(page.threads))
     if page.threads:
         return RedirectResponse(f"/chat/{page.threads[0].id}", 303)
     return presentation_templates().TemplateResponse(
@@ -76,7 +76,7 @@ async def chat_new(
     user: User = Depends(current_user),
 ) -> HTMLResponse:
     """新規チャット画面を表示する。"""
-    logger.info("route.chat_new user_id=%s", user.id)
+    logger.debug("route.chat_new user_id=%s", user.id)
     page = build_chat_page(user_id=user.id)
     if page is None:
         raise HTTPException(404)
@@ -145,7 +145,7 @@ async def chat_thread(
     page = build_chat_page(user_id=user.id, thread_id=thread_id)
     if page is None:
         raise HTTPException(404)
-    logger.info("route.chat_thread user_id=%s thread_id=%s", user.id, thread_id)
+    logger.debug("route.chat_thread user_id=%s thread_id=%s", user.id, thread_id)
     return presentation_templates().TemplateResponse(
         request,
         "chat.html",
@@ -255,7 +255,7 @@ async def add_chat_message(
     messages = page.messages[-2:]
     return presentation_templates().TemplateResponse(
         request,
-        "message_items.html",
+        "message_list.html",
         {
             "request": request,
             "thread": page.thread,
@@ -330,7 +330,7 @@ async def stream_response(
         )
     except ChatUsecaseError as exc:
         raise HTTPException(404) from exc
-    logger.info(
+    logger.debug(
         "route.stream_open user_id=%s thread_id=%s response_id=%s status=%s",
         user.id,
         thread_id,

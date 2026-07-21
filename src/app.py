@@ -66,13 +66,16 @@ def build_app(
         Yields:
             起動中の制御。
         """
-        logger.info("app.start db_path=%s data_dir=%s", cfg.db_path, cfg.data_dir)
+        logger.info("app.start")
+        logger.debug(
+            "app.start.context db_path=%s data_dir=%s", cfg.db_path, cfg.data_dir
+        )
 
         logger.info("app.init.database.start")
         try:
             initialize_database_schema()
         except Exception:
-            logger.error("app.init.database.failed")
+            logger.exception("app.init.database.failed")
             raise
         logger.info("app.init.database.done")
         logger.info("app.init.recovery.start")
@@ -82,7 +85,7 @@ def build_app(
             # lease/fencingを先に導入し、別processの実行中Jobを保護する。
             fail_processing_assistant_messages()
         except Exception:
-            logger.error("app.init.recovery.failed")
+            logger.exception("app.init.recovery.failed")
             raise
         logger.info("app.init.recovery.done")
 

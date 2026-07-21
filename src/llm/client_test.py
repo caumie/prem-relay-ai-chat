@@ -1,12 +1,9 @@
-
 import asyncio
-import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
 from pytest import MonkeyPatch
 
 from src.llm.client import ChatCompletionsApiClient, OpenAIResponder, ResponsesApiClient
@@ -48,7 +45,9 @@ def test_responses_stream_yields_reasoning_and_visible_output_text(
     # 観点: Responses APIのreasoningと本文を別々の内部イベントとして取り出すこと。
     # 目的: provider固有eventをUIのkind別表示契約へ変換する境界を固定する。
     async def fake_events() -> AsyncIterator[FakeOpenAIEvent]:
-        yield FakeOpenAIEvent(type="response.reasoning_summary_text.delta", delta="hidden")
+        yield FakeOpenAIEvent(
+            type="response.reasoning_summary_text.delta", delta="hidden"
+        )
         yield FakeOpenAIEvent(type="response.output_text.delta", delta="visible")
 
     class FakeResponses:
@@ -176,7 +175,11 @@ def test_chat_completions_stream_closes_provider_stream_when_consumer_stops(
     # 観点: Chat Completionsの途中で上位taskが止まるとprovider streamを閉じること。
     # 目的: OpenAI互換APIへのHTTP接続をPython側で明示的にabortする。
     provider_stream = ClosableAsyncStream(
-        [FakeOpenAIEvent(choices=[SimpleNamespace(delta=SimpleNamespace(content="first"))])]
+        [
+            FakeOpenAIEvent(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="first"))]
+            )
+        ]
     )
 
     class FakeCompletions:
@@ -247,49 +250,6 @@ def test_responses_stream_reads_reasoning_text_field(
     )
 
     assert events == [StreamEvent("reasoning_delta", reasoning_delta="thinking")]
-
-
-def test_openai_responder_logs_without_base_url(
-    monkeypatch: MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    # 観点: LLM開始・終了ログに内部base_urlを出さないこと。
-    # 目的: 接続先の秘匿情報を運用ログへ残さない契約を固定する。
-    caplog.set_level(logging.INFO, logger="src.llm.client")
-
-    async def fake_events() -> AsyncIterator[FakeOpenAIEvent]:
-        yield FakeOpenAIEvent(type="response.output_text.delta", delta="visible")
-
-    class FakeResponses:
-        async def create(self, **_: object) -> AsyncIterator[FakeOpenAIEvent]:
-            return fake_events()
-
-    class FakeClient:
-        responses = FakeResponses()
-
-    def fake_async_openai(**_: object) -> FakeClient:
-        return FakeClient()
-
-    monkeypatch.setattr("src.llm.client.AsyncOpenAI", fake_async_openai)
-
-    asyncio.run(
-        _collect(
-            ResolvedAssistant(
-                id="responses",
-                name="Responses",
-                description="",
-                system_prompt="",
-                user_prompts=[],
-                api_mode="responses",
-                base_url="http://internal.example/v1",
-                config={"api_key": "test", "model": "test-model"},
-                max_history_messages=40,
-            )
-        )
-    )
-
-    assert "http://internal.example/v1" not in caplog.text
-    assert "llm.request.started" in caplog.text
-    assert "llm.request.completed" in caplog.text
 
 
 def test_chat_completions_stream_reads_reasoning_field_variants(

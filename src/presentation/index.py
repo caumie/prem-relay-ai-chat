@@ -21,14 +21,14 @@ async def index(request: Request) -> Response:
     # 初期セットアップが完了していない場合は初期セットアップ画面へリダイレクトする
     initial_setup_status = get_initial_setup_status()
     if initial_setup_status.can_create_initial_admin:
-        logger.info("index.redirect target=/setup/admin reason=initial_setup_pending")
+        logger.debug("index.redirect target=/setup/admin reason=initial_setup_pending")
         return RedirectResponse("/setup/admin", 303)
 
     # ユーザーがログインしているかどうかでリダイレクト先を変える
     user_id = request.session.get("user_id")
     if user_id:
-        logger.info("index.redirect target=/chat reason=session_user_present user_id=%s", user_id)
+        logger.debug("index.redirect target=/chat reason=session_user_present user_id=%s", user_id)
         return RedirectResponse("/chat", 303)
     else:
-        logger.info("index.redirect target=/login reason=no_session")
+        logger.debug("index.redirect target=/login reason=no_session")
         return RedirectResponse("/login", 303)

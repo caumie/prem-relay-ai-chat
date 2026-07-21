@@ -28,7 +28,7 @@ class Database:
             with sqlite3.connect(self.db_path) as conn:
                 conn.executescript(SCHEMA_SQL_PATH.read_text(encoding="utf-8"))
         except Exception:
-            logger.error("db.initialize.failed path=%s", self.db_path)
+            logger.exception("db.initialize.failed path=%s", self.db_path)
             raise
         logger.debug("db.initialize.done path=%s", self.db_path)
 
@@ -37,9 +37,16 @@ class Database:
         """引数なしでSQLite接続を生成し、利用後に必ず閉じるcontext managerを返す。"""
         # TODO: 想定する同時アクセス量を計測し、busy_timeoutとWALの採否を決めて
         # 一時的なwrite競合を即時のリクエスト失敗にしない接続方針を固定する。
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("pragma foreign_keys = on")
-        conn.row_factory = sqlite3.Row
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("pragma foreign_keys = on")
+            conn.row_factory = sqlite3.Row
+        except Exception:
+            if conn is not None:
+                conn.close()
+            logger.exception("db.connect.failed path=%s", self.db_path)
+            raise
         try:
             yield conn
         finally:

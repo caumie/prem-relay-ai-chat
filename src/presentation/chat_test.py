@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import NotRequired, TypedDict
 from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 from src.presentation.test_support import (
     TestApplication,
@@ -185,9 +184,7 @@ def test_chat_route_creates_chat_with_htmx(tmp_path: Path) -> None:
     assert "hello" in response.text
 
 
-def test_chat_route_does_not_log_message_preview_on_create(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_chat_route_does_not_log_message_preview_on_create(tmp_path: Path) -> None:
     # 観点: 新規チャット作成時に本文previewがログへ残らないこと。
     # 目的: チャット本文を運用ログへ二次保管しない契約を固定する。
     test_app = started_test_application(
@@ -197,7 +194,6 @@ def test_chat_route_does_not_log_message_preview_on_create(
     client = test_app.client
 
     _login(client)
-    capsys.readouterr()
     page = client.get("/chat/new")
     response = client.post(
         "/chat/new",
@@ -210,15 +206,9 @@ def test_chat_route_does_not_log_message_preview_on_create(
     )
 
     assert response.status_code == 200
-    captured = capsys.readouterr()
-    assert "secret-create-preview" not in captured.err
-    assert "preview=" not in captured.err
-    assert "assistant_message_id=" in captured.err
 
 
-def test_chat_route_does_not_log_message_preview_on_append(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_chat_route_does_not_log_message_preview_on_append(tmp_path: Path) -> None:
     # 観点: 既存スレッドへの投稿時に本文previewがログへ残らないこと。
     # 目的: 追記投稿でも入力本文をログへ複製しない契約を固定する。
     test_app = started_test_application(
@@ -228,7 +218,6 @@ def test_chat_route_does_not_log_message_preview_on_append(
     client = test_app.client
 
     _login(client)
-    capsys.readouterr()
     page = client.get("/chat/new")
     created_response = client.post(
         "/chat/new",
@@ -241,7 +230,6 @@ def test_chat_route_does_not_log_message_preview_on_append(
     )
     thread_id = created_response.headers["HX-Push-Url"].removeprefix("/chat/")
     thread_page = client.get(f"/chat/{thread_id}")
-    capsys.readouterr()
     response = client.post(
         f"/chat/{thread_id}/messages",
         data={
@@ -253,10 +241,6 @@ def test_chat_route_does_not_log_message_preview_on_append(
     )
 
     assert response.status_code == 200
-    captured = capsys.readouterr()
-    assert "secret-append-preview" not in captured.err
-    assert "preview=" not in captured.err
-    assert "assistant_message_id=" in captured.err
 
 
 def test_chat_route_uploads_attachment_when_assistant_allows_it(

@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/login", response_class=HTMLResponse)
 async def login_form(request: Request) -> HTMLResponse:
     """ログインフォームを表示する"""
-    logger.info("login request received")
+    logger.debug("auth.login_form.rendered")
     return presentation_templates().TemplateResponse(
         request,
         "login.html",
@@ -36,7 +36,7 @@ async def login(
     password: str = Form(...),
 ) -> Response:
     """ログインフォームの入力でセッションを開始する。"""
-    logger.info("login submit received")
+    logger.debug("auth.login.submit")
     # TODO: 接続元とログイン名を基準に試行回数を制限し、同期的な
     # パスワード導出処理はevent loopを塞がない実行境界へ移す。
     user = challenge(login_name=login_name, password=password)

@@ -96,15 +96,48 @@ def test_chat_form_tracks_processing_streams_by_message_id() -> None:
     assert "activeProcessingMessageIds.delete(messageId)" in source
 
 
-def test_message_list_slowly_pulses_only_while_waiting_for_response() -> None:
+def test_message_list_owns_message_collection_structure() -> None:
+    # 観点: メッセージ群の繰り返しと一覧内余白をmessage_listが一体で持つこと。
+    # 目的: 中間テンプレートによる不要な包含関係を作らない。
+    message_list = _template("message_list.html")
+    message_item = _template("message_item.html")
+    chat_form = _template("chat_form.html")
+
+    assert "{% for msg in messages %}" in message_list
+    assert 'include "message_items.html"' not in message_list
+    assert "margin-bottom: .75rem;" in message_list
+    assert ".messageItem:last-of-type" in message_list
+    assert "message_items_only" not in message_list
+    assert not Path("src/templates/message_items.html").exists()
+    assert 'hx-swap="{% if thread %}beforeend{% else %}outerHTML{% endif %}"' in chat_form
+    assert 'hx-select="#messages > .messageItem"' in chat_form
+    assert ":scope {" in message_item
+    assert ".messageBubble {" in message_item
+
+
+def test_message_item_slowly_pulses_only_while_waiting_for_response() -> None:
     # 観点: AI応答の本文が届く前だけ、待機表示が緩やかに明滅すること。
     # 目的: 生成済み本文の可読性を損なわず、応答待ちであることを視覚的に伝える。
-    source = _template("message_list.html")
+    source = _template("message_item.html")
 
     assert '.streaming .messageBubble[data-chat-raw-content=""]' in source
     assert "animation: waitingPulse 2.4s ease-in-out infinite;" in source
     assert "@keyframes waitingPulse" in source
     assert "@media (prefers-reduced-motion: reduce)" in source
+
+
+def test_message_item_applies_user_presentation_to_the_scope_root() -> None:
+    # 観点: スコープ根であるユーザーメッセージ自身に配置と配色の条件を適用すること。
+    # 目的: @scope内の子孫セレクタだけになり、ユーザー表示がAI表示と同一になることを防ぐ。
+    source = _template("message_item.html")
+
+    assert ":scope.userMessage {" in source
+    assert ":scope.assistantMessage {" in source
+    assert ":scope.userMessage .messageBubble {" in source
+    assert ":scope.assistantMessage .messageContent {" in source
+    assert "max-width: 100%;" in source
+    assert ":scope.userMessage .messageContent {" in source
+    assert "max-width: min(100%, 46rem);" in source
 
 
 def test_chat_form_template_groups_assistant_options() -> None:
