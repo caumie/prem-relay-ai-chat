@@ -1,7 +1,6 @@
 """admin 向け UserAssistant 管理画面の HTML router を担当する。"""
 
 import logging
-from collections.abc import Sequence
 from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,6 +21,7 @@ from ...usecase.admin_user_assistant.update_user_assistant import update_user_as
 from ...usecase.assistant import AssistantUsecaseError
 from ..context import current_admin, presentation_templates, shell_context
 from ..util.csrf import verify_csrf_token
+from ..util.form import form_string_list, optional_form_string, required_form_string
 
 
 logger = logging.getLogger(__name__)
@@ -193,26 +193,13 @@ def _user_assistant_form_context(
 async def _user_assistant_form_payload(request: Request) -> UserAssistantFormPayload:
     form = await request.form()
     return {
-        "base_assistant_id": _required_str(form.get("base_assistant_id"), "base_assistant_id"),
-        "name": _required_str(form.get("name"), "name"),
-        "description": _optional_str(form.get("description")),
-        "user_prompts": _form_string_list(form.getlist("user_prompts")),
+        "base_assistant_id": required_form_string(form.get("base_assistant_id"), "base_assistant_id"),
+        "name": required_form_string(form.get("name"), "name"),
+        "description": optional_form_string(form.get("description")),
+        "user_prompts": form_string_list(form.getlist("user_prompts")),
         "visibility": _visibility_value(form.get("visibility", "private")),
     }
 
-
-def _required_str(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise UserInputError(f"{field_name} is required")
-    return value.strip()
-
-
-def _optional_str(value: object) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _form_string_list(values: Sequence[object]) -> list[str]:
-    return [value.strip() for value in values if isinstance(value, str) and value.strip()]
 
 
 def _visibility_value(value: object) -> AssistantVisibility:

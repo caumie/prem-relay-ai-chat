@@ -45,7 +45,7 @@
               <a class="button buttonGhost" href="/admin/base-assistants/{{ assistant.id }}/edit">Edit</a>
               <form method="post" action="/admin/base-assistants/{{ assistant.id }}/delete" onsubmit="return confirm('Delete this assistant?');">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                <button class="button buttonGhost" type="submit">Delete</button>
+                <button class="button buttonDanger" type="submit">Delete</button>
               </form>
             </div>
           </article>

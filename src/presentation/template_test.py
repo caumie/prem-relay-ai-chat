@@ -74,6 +74,8 @@ def test_chat_form_limits_attachments_and_shows_the_limit() -> None:
     assert "attachmentLimit" in source
     assert "allowedFiles.slice(0, availableSlots)" in source
     assert "Up to ${attachmentLimit} files can be attached." in source
+    assert "fileInput.files.length > attachmentLimit" in source
+    assert "event.preventDefault()" in source
 
 
 def test_chat_stream_script_keeps_event_source_for_browser_reconnect() -> None:
@@ -84,6 +86,24 @@ def test_chat_stream_script_keeps_event_source_for_browser_reconnect() -> None:
     assert "source.readyState === EventSource.CLOSED" in source
     assert 'if (patch.error)' in source
     assert 'if (patch.done)' in source
+
+
+def test_chat_scroll_stops_stream_following_after_upward_scroll() -> None:
+    # 観点: 利用者の上方向スクロールで自動追従を解除し、下端復帰で再開すること。
+    # 目的: 応答生成中に利用者が過去のメッセージを読もうとしても、画面を下へ戻さない。
+    scroll_source = Path("src/static/js/chat/scroll.js").read_text(encoding="utf-8")
+    stream_source = Path("src/static/js/chat/stream.js").read_text(encoding="utf-8")
+    index_source = Path("src/static/js/chat/index.js").read_text(encoding="utf-8")
+
+    assert 'addEventListener("scroll"' in scroll_source
+    assert "currentScrollTop !== state.lastScrollTop" in scroll_source
+    assert "state.shouldFollow = currentScrollTop > state.lastScrollTop" in scroll_source
+    assert "state.shouldFollow = true" in scroll_source
+    assert "shouldFollowChatStream" in stream_source
+    assert "isChatNearBottom" not in stream_source
+    assert "mountChatScroll" not in scroll_source
+    assert "mountChatScroll" not in index_source
+    assert "scrollChatToBottom();" in index_source
 
 
 def test_chat_form_tracks_processing_streams_by_message_id() -> None:

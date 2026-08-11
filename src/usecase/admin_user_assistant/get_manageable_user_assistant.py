@@ -2,6 +2,7 @@
 
 from ...infrastructure import UserAssistantRepository
 from ...models import User, UserAssistant
+from ..assistant._support import require_admin
 from ..assistant.errors import AssistantUsecaseError
 from . import AdminUserAssistantUsecaseContext, admin_user_assistant_usecase_context
 
@@ -24,14 +25,9 @@ def get_manageable_user_assistant(
     admin 管理画面が対象 assistant の存在確認込みで取得できるようにするため。
     """
     ctx = context if context is not None else admin_user_assistant_usecase_context()
-    _require_admin(actor)
+    require_admin(actor)
     with ctx.database.connect() as conn:
         assistant = UserAssistantRepository(conn).get(user_assistant_id)
     if assistant is None:
         raise AssistantUsecaseError("user assistant not found")
     return assistant
-
-
-def _require_admin(actor: User) -> None:
-    if not actor.is_admin:
-        raise AssistantUsecaseError("admin required")

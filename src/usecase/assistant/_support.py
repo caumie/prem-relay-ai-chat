@@ -1,4 +1,4 @@
-"""ユーザー向け assistant ユースケース間で共有する補助処理を定義する。"""
+"""Assistantユースケース間で共有する補助処理を定義する。"""
 
 from dataclasses import replace
 from uuid import uuid4
@@ -6,6 +6,7 @@ from uuid import uuid4
 from ...config import connection_provider_by_id
 from ...models import (
     AssistantConfigValue,
+    AssistantGenerationConfig,
     AssistantVisibility,
     BaseAssistant,
     ConnectionProvider,
@@ -13,6 +14,8 @@ from ...models import (
     User,
     UserAssistant,
     UserInputError,
+    default_assistant_file_extensions,
+    normalize_file_extensions,
 )
 from .errors import AssistantUsecaseError
 
@@ -28,6 +31,129 @@ def clean_prompts(prompts: list[str]) -> list[str]:
     """
     return [prompt.strip() for prompt in prompts if prompt.strip()]
 
+
+def require_admin(actor: User) -> None:
+    """管理者だけが実行できるAssistant操作でactorを検証する。
+
+    Args:
+        actor: 操作中のユーザー。
+
+    Returns:
+        None。
+
+    Raises:
+        AssistantUsecaseError: actorが管理者でない場合。
+
+    管理者向けAssistantユースケースに同じ認可分岐を複製しないため。
+    """
+    if not actor.is_admin:
+        raise AssistantUsecaseError("admin required")
+
+
+def validate_base_fields(
+    *,
+    providers: list[ConnectionProvider],
+    connection_provider_id: str,
+    name: str,
+    model: str,
+    max_history_messages: int,
+) -> None:
+    """BaseAssistantの作成・更新に共通する入力を検証する。
+
+    Args:
+        providers: 選択可能な接続先一覧。
+        connection_provider_id: 使用する接続先ID。
+        name: Assistant表示名。
+        model: 使用するモデル名。
+        max_history_messages: LLMへ渡す履歴件数上限。
+
+    Returns:
+        None。
+
+    Raises:
+        UserInputError: 必須値、履歴件数、接続先、モデルのいずれかが不正な場合。
+
+    作成と更新で同じProvider・モデル制約を別々に実装しないため。
+    """
+    if not name.strip():
+        raise UserInputError("name is required")
+    if not model.strip():
+        raise UserInputError("model is required")
+    if max_history_messages <= 0:
+        raise UserInputError("max_history_messages must be positive")
+    provider = connection_provider_by_id(providers, connection_provider_id)
+    if provider is None:
+        raise UserInputError("connection provider is required")
+    if provider.allowed_models and model.strip() not in provider.allowed_models:
+        raise UserInputError("model is not allowed for this provider")
+
+
+def normalize_file_extensions_or_default(
+    extensions: list[str] | None,
+) -> list[str]:
+    """添付拡張子を正規化し、空ならAssistant既定値を返す。
+
+    Args:
+        extensions: 入力された拡張子一覧。
+
+    Returns:
+        dotなし小文字の拡張子一覧。
+
+    BaseAssistantの作成と更新で同じ既定値処理を複製しないため。
+    """
+    normalized = normalize_file_extensions(extensions or [])
+    return normalized or default_assistant_file_extensions()
+
+
+def build_base_assistant(
+    *,
+    assistant_id: str,
+    name: str,
+    description: str,
+    system_prompt: str,
+    user_prompts: list[str],
+    connection_provider_id: str,
+    model: str,
+    max_history_messages: int,
+    allow_file_upload: bool,
+    generation_config: AssistantGenerationConfig,
+    allowed_file_extensions: list[str] | None,
+) -> BaseAssistant:
+    """入力値から保存前のBaseAssistantを構築する。
+
+    Args:
+        assistant_id: 新規または更新対象のID。
+        name: 表示名。
+        description: 説明。
+        system_prompt: システム指示。
+        user_prompts: 追加入力指示。
+        connection_provider_id: 接続先ID。
+        model: モデル名。
+        max_history_messages: 履歴件数上限。
+        allow_file_upload: 添付許可フラグ。
+        generation_config: 生成設定。
+        allowed_file_extensions: 添付許可拡張子。
+
+    Returns:
+        入力を正規化したBaseAssistant。
+
+    作成と更新で同じモデル構築・入力整形処理を複製しないため。
+    """
+    return BaseAssistant(
+        id=assistant_id,
+        name=name.strip(),
+        description=description.strip(),
+        system_prompt=system_prompt.strip(),
+        user_prompts=clean_prompts(user_prompts),
+        connection_provider_id=connection_provider_id,
+        model=model.strip(),
+        generation_config=generation_config,
+        max_history_messages=max_history_messages,
+        allow_file_upload=allow_file_upload,
+        allowed_file_extensions=normalize_file_extensions_or_default(
+            allowed_file_extensions
+        ),
+    )
 
 def validate_user_fields(
     *,

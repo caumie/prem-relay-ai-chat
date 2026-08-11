@@ -40,6 +40,7 @@ def build_llm_input(
     # TODO: 履歴本文・添付の合計byte数と推定token数に上限を設け、
     # 巨大なbase64化によるメモリ消費と外部API費用を送信前に制御する。
     selected = history[-assistant.max_history_messages :]
+    prompt = "\n\n".join(assistant.user_prompts)
     messages: list[LlmMessage] = []
     if assistant.system_prompt:
         messages.append({"role": "system", "content": assistant.system_prompt})
@@ -47,8 +48,7 @@ def build_llm_input(
         if item.status is MessageStatus.FAILED:
             continue
         content = item.content
-        if item.role is MessageRole.USER and assistant.user_prompts:
-            prompt = "\n\n".join(assistant.user_prompts)
+        if item.role is MessageRole.USER and prompt:
             content = f"{prompt}\n\n{content}"
         messages.append(
             {
@@ -98,8 +98,8 @@ def _responses_content(
     if text:
         parts.append({"type": "input_text", "text": text})
     for attachment in attachments:
-        encoded = _encoded_file(uploads_dir, attachment)
         if attachment.content_type.startswith("image/"):
+            encoded = _encoded_file(uploads_dir, attachment)
             parts.append(
                 {
                     "type": "input_image",
@@ -107,6 +107,7 @@ def _responses_content(
                 }
             )
         elif attachment.content_type == "application/pdf":
+            encoded = _encoded_file(uploads_dir, attachment)
             parts.append(
                 {
                     "type": "input_file",
@@ -124,6 +125,7 @@ def _responses_content(
                 }
             )
         else:
+            encoded = _encoded_file(uploads_dir, attachment)
             parts.append(
                 {
                     "type": "input_text",
@@ -186,11 +188,9 @@ def _encoded_file(uploads_dir: Path, attachment: Attachment) -> str:
     Returns:
         ファイル内容のbase64文字列。
     """
-    path = (uploads_dir / attachment.stored_path).resolve()
-    root = uploads_dir.resolve()
-    if root != path and root not in path.parents:
-        raise ValueError("invalid attachment path")
-    return base64.b64encode(path.read_bytes()).decode("ascii")
+    return base64.b64encode(
+        _attachment_path(uploads_dir, attachment).read_bytes()
+    ).decode("ascii")
 
 
 def _decoded_text_attachment(uploads_dir: Path, attachment: Attachment) -> str:
@@ -203,12 +203,32 @@ def _decoded_text_attachment(uploads_dir: Path, attachment: Attachment) -> str:
     Returns:
         ファイル名見出しと本文を含むテキスト。
     """
+    path = _attachment_path(uploads_dir, attachment)
+    body = path.read_text(encoding="utf-8", errors="replace")
+    return f"[添付ファイル: {attachment.original_filename}]\n{body}"
+
+
+def _attachment_path(uploads_dir: Path, attachment: Attachment) -> Path:
+    """添付保存先をuploads_dir配下の実パスへ安全に解決する。
+
+    Args:
+        uploads_dir: 添付保存ルート。
+        attachment: DBに保存済みの添付ファイル情報。
+
+    Returns:
+        uploads_dir配下の解決済み実パス。
+
+    Raises:
+        ValueError: 保存相対パスがuploads_dirの外へ出る場合。
+
+    添付の読み込み処理ごとに同じパス検証を複製せず、安全境界を一箇所で保つため。
+    """
     path = (uploads_dir / attachment.stored_path).resolve()
     root = uploads_dir.resolve()
     if root != path and root not in path.parents:
         raise ValueError("invalid attachment path")
-    body = path.read_text(encoding="utf-8", errors="replace")
-    return f"[添付ファイル: {attachment.original_filename}]\n{body}"
+    return path
+
 
 
 def _is_text_attachment(attachment: Attachment) -> bool:

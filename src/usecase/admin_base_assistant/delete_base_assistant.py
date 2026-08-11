@@ -2,6 +2,7 @@
 
 from ...infrastructure import BaseAssistantRepository
 from ...models import User
+from ..assistant._support import require_admin
 from ..assistant.errors import AssistantUsecaseError
 from . import AdminBaseAssistantUsecaseContext, admin_base_assistant_usecase_context
 
@@ -24,7 +25,7 @@ def delete_base_assistant(
     管理対象の base assistant を存在確認つきで削除するため。
     """
     ctx = context if context is not None else admin_base_assistant_usecase_context()
-    _require_admin(actor)
+    require_admin(actor)
     with ctx.database.connect() as conn:
         repo = BaseAssistantRepository(conn)
         if repo.get(base_assistant_id) is None:
@@ -32,8 +33,3 @@ def delete_base_assistant(
         deleted = repo.logical_delete(base_assistant_id=base_assistant_id)
         conn.commit()
         return deleted
-
-
-def _require_admin(actor: User) -> None:
-    if not actor.is_admin:
-        raise AssistantUsecaseError("admin required")

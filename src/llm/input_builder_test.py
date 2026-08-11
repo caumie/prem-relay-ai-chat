@@ -3,6 +3,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
+import pytest
+
 from src.llm.input_builder import build_llm_input
 from src.models import (
     Attachment,
@@ -139,6 +141,35 @@ def test_llm_input_builder_sends_unsupported_attachment_as_base64_text(
             "base64:\nAAEC"
         ),
     }
+
+
+def test_llm_input_builder_rejects_attachment_path_escape(tmp_path: Path) -> None:
+    """添付本文の読み込み時に保存先ルート外のパスを拒否する。"""
+    # 観点: LLM入力構築へ渡された保存相対パスがuploads_dirの外へ出られないこと。
+    # 目的: 共通パス解決へ整理しても、添付ファイルの安全境界を維持する。
+    attachment = _attachment(
+        tmp_path,
+        content_type="text/plain",
+        body=b"secret",
+    )
+    attachment = Attachment(
+        id=attachment.id,
+        user_id=attachment.user_id,
+        original_filename=attachment.original_filename,
+        stored_path="../outside.txt",
+        content_type=attachment.content_type,
+        size_bytes=attachment.size_bytes,
+        sha256=attachment.sha256,
+        created_at=attachment.created_at,
+    )
+
+    with pytest.raises(ValueError, match="invalid attachment path"):
+        build_llm_input(
+            tmp_path,
+            history=[_message(attachment.id, content="read")],
+            attachments_by_id={attachment.id: attachment},
+            assistant=_assistant(allow_file_upload=True),
+        )
 
 
 def test_build_llm_input_applies_assistant_prompts_and_skips_failed(

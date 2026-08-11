@@ -220,6 +220,14 @@ export function mountChatForm(root) {
     attachmentNotice.hidden = !message;
   }
 
+  /**
+   * @returns {boolean} ネイティブのファイル入力が添付上限を超えているか。
+   * FileListの差し替えに失敗したブラウザでも、元の全ファイルを送信させない。
+   */
+  function attachmentLimitExceeded() {
+    return Boolean(fileInput && fileInput.files.length > attachmentLimit);
+  }
+
   function appendFiles(files) {
     const allowedFiles = filterAllowedFiles(files);
     const availableSlots = Math.max(attachmentLimit - selectedFiles.length, 0);
@@ -317,6 +325,12 @@ export function mountChatForm(root) {
   });
 
   form.addEventListener("submit", (event) => {
+    if (attachmentLimitExceeded()) {
+      event.preventDefault();
+      setAttachmentNotice(`Up to ${attachmentLimit} files can be attached.`);
+      return;
+    }
+
     const now = Date.now();
     const last = Number.parseInt(form.dataset.chatLastSubmittedAt || "0", 10);
     const debounceMs =

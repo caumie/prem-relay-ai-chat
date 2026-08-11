@@ -315,8 +315,6 @@ class AuthRepository:
             dict(id=user_id),
         )
         if cursor.rowcount != 1:
-            if self.get_user(user_id) is None:
-                return False
             return False
         self.conn.execute(
             """

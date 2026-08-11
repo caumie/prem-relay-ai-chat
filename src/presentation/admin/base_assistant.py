@@ -1,7 +1,6 @@
 """admin 向け BaseAssistant 管理画面の HTML router を担当する。"""
 
 import logging
-from collections.abc import Sequence
 from json import JSONDecodeError, dumps, loads
 import re
 from typing import TypedDict
@@ -30,6 +29,7 @@ from ...usecase.admin_base_assistant.update_base_assistant import update_base_as
 from ...usecase.assistant import AssistantUsecaseError
 from ..context import current_admin, presentation_templates, shell_context
 from ..util.csrf import verify_csrf_token
+from ..util.form import form_string_list, optional_form_string, required_form_string
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -204,38 +204,26 @@ async def _base_assistant_form_payload(request: Request) -> BaseAssistantFormPay
     if not isinstance(max_history_raw, str) or not max_history_raw.isdigit():
         raise UserInputError("max_history_messages must be a positive integer")
     return {
-        "name": _required_str(form.get("name"), "name"),
-        "description": _optional_str(form.get("description")),
-        "system_prompt": _optional_str(form.get("system_prompt")),
-        "user_prompts": _form_string_list(form.getlist("user_prompts")),
-        "connection_provider_id": _required_str(
+        "name": required_form_string(form.get("name"), "name"),
+        "description": optional_form_string(form.get("description")),
+        "system_prompt": optional_form_string(form.get("system_prompt")),
+        "user_prompts": form_string_list(form.getlist("user_prompts")),
+        "connection_provider_id": required_form_string(
             form.get("connection_provider_id"),
             "connection_provider_id",
         ),
-        "model": _required_str(form.get("model"), "model"),
+        "model": required_form_string(form.get("model"), "model"),
         "max_history_messages": int(max_history_raw),
         "allow_file_upload": form.get("allow_file_upload") == "on",
         "allowed_file_extensions": _extension_string_list(
-            _optional_str(form.get("allowed_file_extensions"))
+            optional_form_string(form.get("allowed_file_extensions"))
         ),
         "generation_config": _generation_config_from_json(
-            _optional_str(form.get("generation_config_json"))
+            optional_form_string(form.get("generation_config_json"))
         ),
     }
 
 
-def _required_str(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise UserInputError(f"{field_name} is required")
-    return value.strip()
-
-
-def _optional_str(value: object) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _form_string_list(values: Sequence[object]) -> list[str]:
-    return [value.strip() for value in values if isinstance(value, str) and value.strip()]
 
 
 def _extension_string_list(raw_value: str) -> list[str]:

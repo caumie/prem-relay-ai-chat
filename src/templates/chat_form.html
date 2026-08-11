@@ -66,7 +66,7 @@
         gap: .65rem;
         padding: .75rem .85rem;
         border: 1px solid var(--border-subtle);
-        border-radius: 1.2rem;
+        border-radius: var(--radius-lg);
         background: var(--bg-input);
     }
 
@@ -84,7 +84,7 @@
         gap: .55rem;
         padding: .9rem;
         border: 1px dashed var(--accent);
-        border-radius: 1rem;
+        border-radius: var(--radius-md);
         color: var(--accent);
         background: color-mix(in srgb, var(--bg-input) 92%, transparent);
         pointer-events: none;
@@ -116,7 +116,7 @@
 
     .attachmentNotice {
         margin: 0;
-        color: var(--danger, #c33);
+        color: var(--danger-text);
         font-size: .875rem;
     }
 
@@ -155,7 +155,7 @@
         gap: .15rem .55rem;
         max-width: min(100%, 18rem);
         padding: .45rem;
-        border-radius: .95rem;
+        border-radius: var(--radius-md);
         background: var(--bg-panel);
         color: var(--text-main);
     }
@@ -164,7 +164,7 @@
         grid-area: preview;
         width: 2.75rem;
         height: 2.75rem;
-        border-radius: .7rem;
+        border-radius: var(--radius-md);
         object-fit: cover;
         background: rgba(0, 0, 0, .08);
     }
@@ -242,6 +242,13 @@
     .sendButton:focus-visible {
         background: color-mix(in srgb, var(--accent) 10%, transparent);
         color: var(--accent);
+    }
+
+    .sendButton:disabled {
+        background: transparent;
+        color: var(--send-icon);
+        cursor: not-allowed;
+        opacity: .45;
     }
 
     .chatInputField:focus,

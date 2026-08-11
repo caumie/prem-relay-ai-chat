@@ -1,9 +1,13 @@
 """admin user assistant 更新ユースケースを担当する。"""
 
-from dataclasses import replace
 
 from ...infrastructure import BaseAssistantRepository, UserAssistantRepository
 from ...models import AssistantVisibility, User, UserAssistant, UserInputError
+from ..assistant._support import (
+    require_admin,
+    updated_user_assistant,
+    validate_user_fields,
+)
 from ..assistant.errors import AssistantUsecaseError
 from . import AdminUserAssistantUsecaseContext, admin_user_assistant_usecase_context
 
@@ -36,8 +40,8 @@ def update_user_assistant(
     admin 管理画面が対象所有者に依存せず更新できるようにするため。
     """
     ctx = context if context is not None else admin_user_assistant_usecase_context()
-    _require_admin(actor)
-    _validate_fields(
+    require_admin(actor)
+    validate_user_fields(
         base_assistant_id=base_assistant_id,
         name=name,
         visibility=visibility,
@@ -51,37 +55,14 @@ def update_user_assistant(
         if base_assistant_id is None or base_repo.get(base_assistant_id) is None:
             raise UserInputError("base assistant is required")
         updated = user_repo.update(
-            replace(
-                assistant,
+            updated_user_assistant(
+                assistant=assistant,
                 base_assistant_id=base_assistant_id,
-                name=name.strip(),
-                description=description.strip(),
-                user_prompts=_clean_prompts(user_prompts),
+                name=name,
+                description=description,
+                user_prompts=user_prompts,
                 visibility=visibility,
             )
         )
         conn.commit()
         return updated
-
-
-def _require_admin(actor: User) -> None:
-    if not actor.is_admin:
-        raise AssistantUsecaseError("admin required")
-
-
-def _clean_prompts(prompts: list[str]) -> list[str]:
-    return [prompt.strip() for prompt in prompts if prompt.strip()]
-
-
-def _validate_fields(
-    *,
-    base_assistant_id: str | None,
-    name: str,
-    visibility: AssistantVisibility,
-) -> None:
-    if base_assistant_id is None or not base_assistant_id.strip():
-        raise UserInputError("base assistant is required")
-    if not name.strip():
-        raise UserInputError("name is required")
-    if visibility not in ("private", "public"):
-        raise UserInputError("visibility is required")

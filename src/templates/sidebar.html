@@ -123,9 +123,11 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .threadLink:hover,
-      .threadLink.active {
+      .threadLink:hover {
         background: var(--bg-sidebar-hover);
+      }
+      .threadLink.active {
+        background: var(--bg-chat-active);
       }
       .threadDeleteForm {
         position: absolute;
@@ -156,7 +158,7 @@
       }
       .threadDeleteButton:hover,
       .threadDeleteButton:focus-visible {
-        background: #dc3545;
+        background: var(--danger);
         color: #fff;
       }
       .iconOnlyButton {

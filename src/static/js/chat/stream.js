@@ -8,7 +8,7 @@
 
 import { applyMessagePatch } from "./message-view.js";
 import { parseStreamEvent, toMessagePatch } from "./message-payload.js";
-import { isChatNearBottom, scrollChatToBottom } from "./scroll.js";
+import { scrollChatToBottom, shouldFollowChatStream } from "./scroll.js";
 
 // HTMXによる再mountでも同じmessageへ接続を重複生成しないため、IDで所有する。
 const activeStreams = new Map();
@@ -42,7 +42,9 @@ function startStream(message) {
       return;
     }
 
-    const shouldFollowStream = isChatNearBottom();
+    // DOM更新前に追従可否を確認する。上方向への利用者操作で追従を解除し、
+    // patch後も下端へ戻さず、利用者が下端へ戻ったときだけ再開する。
+    const shouldFollowStream = shouldFollowChatStream();
     applyMessagePatch(target, patch);
     // serverが確定したapplication終端だけをprocessing解除条件にする。
     if (patch.error) {

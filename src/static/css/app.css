@@ -47,13 +47,19 @@
         --bg-message-user: #10a37f;
         --bg-message-assistant: #f3f4f6;
         --border-subtle: #e5e7eb;
-        --btn-new-border: #d1d5db;
         --text-main: #202123;
         --text-muted: #6b7280;
         --text-message-user: #ffffff;
         --text-message-assistant: #202123;
         --accent: #10a37f;
         --accent-soft: #19c37d;
+        --link-color: #dbdbdb;
+        --link-hover: #2f6f60;
+        --danger: #b42318;
+        --danger-hover: #8f1c13;
+        --danger-surface: #fdecef;
+        --danger-border: #f5c2c7;
+        --danger-text: #a61b2b;
         --input-placeholder: #9ca3af;
         --send-icon: #6b7280;
     }
@@ -68,13 +74,19 @@
         --bg-message-user: #10a37f;
         --bg-message-assistant: #444654;
         --border-subtle: #4a4b55;
-        --btn-new-border: #565869;
         --text-main: #ececf1;
         --text-muted: #8e8ea0;
         --text-message-user: #ececf1;
         --text-message-assistant: #ececf1;
         --accent: #10a37f;
         --accent-soft: #19c37d;
+        --link-color: #dbdbdb;
+        --link-hover: #2f6f60;
+        --danger: #b42318;
+        --danger-hover: #d13c30;
+        --danger-surface: #4a252a;
+        --danger-border: #7f3a44;
+        --danger-text: #fda4af;
         --input-placeholder: #acacbe;
         --send-icon: #acacbe;
     }
@@ -106,12 +118,28 @@
     }
 
     a {
-        color: var(--accent);
+        color: var(--link-color);
         text-decoration: none;
     }
 
     a:hover {
-        color: var(--accent-soft);
+        color: var(--link-hover);
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+        color: var(--input-placeholder);
+        opacity: 1;
+    }
+
+    :where(.messageBubble, .messageReasoning) a {
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 0.18em;
+    }
+
+    :where(.messageBubble, .messageReasoning) a:hover {
+        text-decoration-thickness: 2px;
     }
 }
 
@@ -262,15 +290,15 @@
     }
 
     .buttonDanger {
-        background: #dc3545;
-        border-color: #dc3545;
+        background: var(--danger);
+        border-color: var(--danger);
         color: #fff;
     }
 
     .buttonDanger:hover,
     .buttonDanger:focus {
-        background: #b52a38;
-        border-color: #b52a38;
+        background: var(--danger-hover);
+        border-color: var(--danger-hover);
         color: #fff;
     }
 
@@ -369,9 +397,9 @@
     }
 
     .alertDanger {
-        background: #fdecef;
-        border-color: #f5c2c7;
-        color: #a61b2b;
+        background: var(--danger-surface);
+        border-color: var(--danger-border);
+        color: var(--danger-text);
     }
 
 }
